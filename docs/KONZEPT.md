@@ -595,4 +595,14 @@ ursprünglichen Text:
 * **Topologie:** Für das Live-Gewicht muss die Waage an dem PC hängen, an
   dem der Parcel-Station-Browser läuft. Hängt sie an einer separaten
   Linux-Box, bleibt dort nur der Serverpfad `/weight`.
+* **Ausweichmodus ohne Pflichtbestätigung (Parcel Station).** Solange die
+  Waage noch an der Linux-Box hängt, liefert der Serverpfad `/weight` das
+  Gewicht. Ein leeres Eingabefeld im Ausweichmodus heißt deshalb »Server
+  entscheidet wie bisher« (Server-Waage, dann Artikelgewichte), statt die
+  Sendung zu blockieren. Blockiert wird nur, wenn die Waage live ist und
+  sich bewegt oder 0 kg zeigt. Sobald der Serverpfad entfällt, sollte ein
+  leeres Feld ohne Live-Waage ebenfalls blockieren.
+* **Quelle am Shipment:** Jede Sendung bekommt einen Timeline-Kommentar
+  »Weight x kg from …« (Waage per Bridge, manuelle Eingabe, Server-Waage
+  oder Artikelgewichte).
 
