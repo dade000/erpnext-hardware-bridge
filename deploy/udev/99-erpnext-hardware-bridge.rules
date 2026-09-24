@@ -1,0 +1,10 @@
+# /etc/udev/rules.d/99-erpnext-hardware-bridge.rules
+# Stabiler Name für die Waage, unabhängig davon, ob sie als ttyUSB0 oder
+# ttyUSB1 auftaucht. VID/PID des USB-Seriell-Adapters ermitteln mit:
+#   udevadm info -a -n /dev/ttyUSB0 | grep -E 'idVendor|idProduct|serial'
+# oder in der Bridge-Oberfläche unter Konfiguration → Ports.
+# Beispielwerte (Prolific PL2303) – an den eigenen Adapter anpassen:
+SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", SYMLINK+="waage", GROUP="dialout", MODE="0660"
+
+# Alternative ohne udev: in der Oberfläche »USB-Merkmale (VID/PID)« wählen,
+# dann findet die Bridge den Port selbst (funktioniert auch unter Windows).

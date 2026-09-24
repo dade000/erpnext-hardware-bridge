@@ -1,0 +1,25 @@
+# /etc/systemd/system/erpnext-hardware-bridge.service
+# Alternative zu `erpnext-hardware-bridge -service install`, mit eigenem
+# Dienstbenutzer und Härtung. Siehe scripts/install-linux.sh.
+[Unit]
+Description=ERPNext Hardware Bridge
+After=network.target
+
+[Service]
+User=hwbridge
+Group=hwbridge
+# dialout: serielle Ports; plugdev: USB-Kamera (Phase 2)
+SupplementaryGroups=dialout plugdev
+ExecStart=/usr/local/bin/erpnext-hardware-bridge -config /etc/erpnext-hardware-bridge/bridge.yaml -log-file -
+Restart=always
+RestartSec=2
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# Die Oberfläche schreibt bridge.yaml (+ .bak) in dieses Verzeichnis.
+ReadWritePaths=/etc/erpnext-hardware-bridge
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,4 @@
+/dist/
+*.log
+bridge.yaml
+bridge.yaml.bak

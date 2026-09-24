@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="bridge-csrf" content="{{.CSRF}}">
+<title>Hardware Bridge</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #e3e6eb;
+  --accent: #2463eb; --ok: #148a4a; --warn: #b26b00; --err: #c62828; --off: #7a8190;
+  --ok-bg: #e5f5ec; --warn-bg: #fff3dc; --err-bg: #fdeaea; --off-bg: #eef0f3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c; --panel: #1c2027; --text: #e6e8ec; --muted: #9aa3b2; --line: #2c323c;
+    --accent: #6d9bff; --ok: #4cc38a; --warn: #f0b04a; --err: #ff7b7b; --off: #9aa3b2;
+    --ok-bg: #173325; --warn-bg: #3a2c12; --err-bg: #3c1c1c; --off-bg: #262b33;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 14px 20px; display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: baseline; }
+header h1 { font-size: 18px; margin: 0; }
+header .meta { color: var(--muted); font-size: 13px; }
+nav { display: flex; gap: 4px; padding: 0 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
+nav button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; font: inherit; color: var(--muted); cursor: pointer; }
+nav button.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 60px; }
+section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; margin-bottom: 16px; }
+section.panel h2 { font-size: 15px; margin: 0 0 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 13px; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; }
+.b-online { background: var(--ok-bg); color: var(--ok); }
+.b-starting, .b-offline, .b-disabled { background: var(--off-bg); color: var(--off); }
+.b-error { background: var(--err-bg); color: var(--err); }
+.weight { font-variant-numeric: tabular-nums; font-weight: 600; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.notice { padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 14px; }
+.n-warn { background: var(--warn-bg); color: var(--warn); }
+.n-err { background: var(--err-bg); color: var(--err); }
+.n-ok { background: var(--ok-bg); color: var(--ok); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px 16px; }
+label { display: block; font-size: 13px; color: var(--muted); }
+label > input, label > select, label > textarea { display: block; width: 100%; margin-top: 4px; }
+input, select, textarea { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+textarea { min-height: 84px; font-family: ui-monospace, monospace; font-size: 13px; }
+input[type=checkbox] { width: auto; display: inline; margin-right: 6px; }
+.check { display: flex; align-items: center; color: var(--text); font-size: 14px; }
+button.btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--err); }
+.device { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+.device-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 8px; flex-wrap: wrap; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.sticky { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0; border-top: 1px solid var(--line); }
+pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.hidden { display: none; }
+@media (max-width: 600px) { th:nth-child(4), td:nth-child(4) { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ERPNext Hardware Bridge</h1>
+  <span class="meta" id="meta">…</span>
+</header>
+<nav>
+  <button data-tab="status" class="active">Status</button>
+  <button data-tab="config">Konfiguration</button>
+  <button data-tab="log">Log</button>
+</nav>
+<main>
+  <div id="tab-status">
+    <div id="status-notices"></div>
+    <section class="panel">
+      <h2>Geräte</h2>
+      <table><thead><tr><th>Gerät</th><th>Zustand</th><th>Letzter Wert</th><th>Port</th></tr></thead><tbody id="devices"></tbody></table>
+    </section>
+    <section class="panel">
+      <h2>Verbundene Clients</h2>
+      <table><thead><tr><th>Client</th><th>Origin</th><th>Seit</th><th>Abonniert</th></tr></thead><tbody id="clients"></tbody></table>
+    </section>
+  </div>
+
+  <div id="tab-config" class="hidden">
+    <div id="cfg-notices"></div>
+    <section class="panel">
+      <h2>Allgemein</h2>
+      <div class="grid">
+        <label>Stationsname<input id="c-station"></label>
+        <label>Port der WS-API<input id="c-port" type="number" min="1" max="65535"></label>
+        <label>Log-Level<select id="c-loglevel"><option>debug</option><option>info</option><option>warn</option><option>error</option></select></label>
+        <label>Token (optional)<input id="c-token" type="password" autocomplete="new-password" placeholder="leer = kein Token"></label>
+      </div>
+      <p class="muted small">Die WS-API bindet immer 127.0.0.1 und ::1. Das Desk erwartet Port 8735; ein anderer Port muss auch im Desk geändert werden und braucht einen Neustart des Dienstes.</p>
+      <label>Erlaubte Origins (eine pro Zeile, z.B. https://erp.holzschuhe.at)<textarea id="c-origins" spellcheck="false"></textarea></label>
+    </section>
+
+    <section class="panel">
+      <h2>Geräte</h2>
+      <div id="c-devices"></div>
+      <div class="row">
+        <button class="btn" id="add-scale">+ Waage</button>
+        <button class="btn" id="rescan">Ports neu suchen</button>
+        <span class="muted small" id="ports-info"></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>HTTP-Kompat (Übergang für den Frappe-Server)</h2>
+      <p class="muted small">Liefert <code>/weight</code> im Format der bisherigen Flask-App. Alle anderen Pfade gehen an den Legacy-Upstream, z.B. die Flask-App für <code>/shot</code> und <code>/health</code>.</p>
+      <label class="check"><input type="checkbox" id="h-enabled">aktiv</label>
+      <div class="grid" style="margin-top:10px">
+        <label>Listen-Adresse<input id="h-listen" placeholder=":5000"></label>
+        <label>Basic-Auth Benutzer<input id="h-user" autocomplete="off"></label>
+        <label>Basic-Auth Passwort<input id="h-pass" type="password" autocomplete="new-password"></label>
+        <label>Waage für /weight<select id="h-scale"></select></label>
+        <label>Legacy-Upstream<input id="h-upstream" placeholder="http://127.0.0.1:5001"></label>
+      </div>
+      <div id="h-warn"></div>
+    </section>
+
+    <div class="sticky row">
+      <button class="btn primary" id="save">Speichern</button>
+      <button class="btn" id="reload">Verwerfen</button>
+      <span class="muted small" id="cfg-path"></span>
+    </div>
+  </div>
+
+  <div id="tab-log" class="hidden">
+    <section class="panel"><pre class="log" id="log"></pre></section>
+  </div>
+</main>
+
+<script>
+"use strict";
+const CSRF = document.querySelector('meta[name="bridge-csrf"]').content;
+const MASK = "********";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const STATE_DE = { online: "verbunden", offline: "nicht verbunden", error: "Fehler", starting: "startet", disabled: "entfernt" };
+
+async function api(method, path, body) {
+  const r = await fetch(path, {
+    method,
+    headers: body ? { "Content-Type": "application/json", "X-Bridge-CSRF": CSRF } : { "X-Bridge-CSRF": CSRF },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, data };
+}
+
+// ---------- Tabs ----------
+let tab = "status";
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("active", x === b));
+  for (const t of ["status", "config", "log"]) $("tab-" + t).classList.toggle("hidden", t !== tab);
+  if (tab === "config" && !cfgLoaded) loadConfig();
+  if (tab === "log") refreshLog();
+}));
+
+// ---------- Status ----------
+function fmtLast(d) {
+  const l = d.last;
+  if (!l) return '<span class="muted">–</span>';
+  if (d.kind === "scale" && typeof l.kg === "number") {
+    const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
+    return `<span class="weight">${l.kg.toFixed(3)} kg</span> ${l.stable ? "stabil" : '<span class="muted">bewegt</span>'}<div class="muted small">roh „${esc(l.raw)}“, vor ${age}s</div>`;
+  }
+  return esc(JSON.stringify(l));
+}
+function fmtStats(s) {
+  if (!s) return "";
+  const parts = [`${s.reads} Messungen`];
+  if (s.timeouts) parts.push(`${s.timeouts} Timeouts`);
+  if (s.bad_lines) parts.push(`${s.bad_lines} unlesbar${s.last_bad ? " („" + esc(s.last_bad) + "“)" : ""}`);
+  if (s.reopens) parts.push(`${s.reopens}× neu verbunden`);
+  return `<div class="muted small">${parts.join(" · ")}</div>`;
+}
+async function refreshStatus() {
+  let r;
+  try { r = await api("GET", "/api/status"); } catch { $("meta").textContent = "Bridge nicht erreichbar"; return; }
+  const s = r.data;
+  $("meta").textContent = `Station ${s.bridge.station} · ${s.bridge.version} · ${s.bridge.platform} · Protokoll ${s.bridge.protocol} · läuft seit ${Math.round(s.bridge.uptime_s / 60)} min`;
+  const notes = [];
+  if (!s.config_exists) notes.push(`<div class="notice n-warn">Noch keine Konfiguration gespeichert (${esc(s.config_path)}). Unter „Konfiguration“ einrichten.</div>`);
+  if (s.restart_required) notes.push('<div class="notice n-warn">Der Port der WS-API wurde geändert. Wirksam erst nach Neustart des Dienstes.</div>');
+  for (const w of s.warnings || []) notes.push(`<div class="notice n-warn">${esc(w)}</div>`);
+  if (!(s.config.allowed_origins || []).length) notes.push('<div class="notice n-err">Keine erlaubten Origins – kein Desk kann sich verbinden.</div>');
+  $("status-notices").innerHTML = notes.join("");
+  $("devices").innerHTML = s.devices.length ? s.devices.map((d) => `<tr>
+      <td><b>${esc(d.id)}</b><div class="muted small">${esc(d.kind)} / ${esc(d.driver)}</div></td>
+      <td><span class="badge b-${esc(d.state)}">${esc(STATE_DE[d.state] || d.state)}</span>${d.message ? `<div class="small">${esc(d.message)}</div>` : ""}</td>
+      <td>${fmtLast(d)}${fmtStats(d.stats)}</td>
+      <td class="small">${esc(d.port)}</td></tr>`).join("")
+    : '<tr><td colspan="4" class="muted">Keine Geräte eingerichtet.</td></tr>';
+  $("clients").innerHTML = s.clients.length ? s.clients.map((c) => `<tr>
+      <td>${esc(c.client || "?")}</td><td class="small">${esc(c.origin)}</td>
+      <td class="small">${new Date(c.since).toLocaleTimeString()}</td><td class="small">${esc((c.subscribed || []).join(", ")) || "–"}</td></tr>`).join("")
+    : '<tr><td colspan="4" class="muted">Kein Desk verbunden.</td></tr>';
+}
+
+// ---------- Log ----------
+async function refreshLog() {
+  const r = await api("GET", "/api/logs");
+  const el = $("log");
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+  el.textContent = (r.data || []).join("\n");
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+// ---------- Konfiguration ----------
+let cfg = null, cfgLoaded = false, ports = [], drivers = {};
+
+async function loadPorts() {
+  const r = await api("GET", "/api/ports");
+  ports = r.ok ? r.data : [];
+  $("ports-info").textContent = r.ok ? `${ports.length} serielle Ports erkannt` : "Ports konnten nicht gelesen werden: " + (r.data.error || r.status);
+}
+
+async function loadConfig() {
+  const [r] = await Promise.all([api("GET", "/api/config"), loadPorts()]);
+  cfg = r.data.config;
+  drivers = r.data.drivers || {};
+  cfg.devices = cfg.devices || [];
+  $("cfg-path").textContent = r.data.path;
+  cfgLoaded = true;
+  renderConfig();
+}
+
+function renderConfig() {
+  $("c-station").value = cfg.station || "";
+  $("c-port").value = cfg.listen_port || 8735;
+  $("c-loglevel").value = cfg.log_level || "info";
+  $("c-token").value = cfg.token || "";
+  $("c-origins").value = (cfg.allowed_origins || []).join("\n");
+  const h = cfg.http_compat || {};
+  $("h-enabled").checked = !!h.enabled;
+  $("h-listen").value = h.listen || "";
+  $("h-user").value = (h.basic_auth || {}).user || "";
+  $("h-pass").value = (h.basic_auth || {}).password || "";
+  $("h-upstream").value = h.legacy_upstream || "";
+  renderDevices();
+  renderScaleSelect(h.scale_device || "");
+  compatWarning();
+}
+
+function renderScaleSelect(sel) {
+  const scales = cfg.devices.filter((d) => d.kind === "scale");
+  $("h-scale").innerHTML = '<option value="">(erste Waage)</option>' +
+    scales.map((d) => `<option ${d.id === sel ? "selected" : ""}>${esc(d.id)}</option>`).join("");
+}
+
+function portOptions() {
+  const opts = [];
+  for (const p of ports) {
+    opts.push(p.name);
+    for (const a of p.aliases || []) opts.push(a);
+  }
+  return opts;
+}
+
+function renderDevices() {
+  const box = $("c-devices");
+  if (!cfg.devices.length) { box.innerHTML = '<p class="muted">Noch keine Geräte.</p>'; return; }
+  box.innerHTML = cfg.devices.map((d, i) => {
+    const mode = d.port && d.port.match ? "match" : "path";
+    const m = (d.port && d.port.match) || {};
+    const usb = ports.filter((p) => p.is_usb);
+    const kindDrivers = drivers[d.kind] || [];
+    return `<div class="device" data-i="${i}">
+      <div class="device-head"><b>${esc(d.id || "neues Gerät")}</b>
+        <div class="row">
+          <button class="btn" data-act="test">Testen</button>
+          <button class="btn danger" data-act="remove">Entfernen</button>
+        </div>
+      </div>
+      <div class="grid">
+        <label>ID<input data-f="id" value="${esc(d.id)}"></label>
+        <label>Treiber<select data-f="driver">${kindDrivers.map((x) => `<option ${x === d.driver ? "selected" : ""}>${esc(x)}</option>`).join("")}
+          ${kindDrivers.includes(d.driver) ? "" : `<option selected>${esc(d.driver)}</option>`}</select></label>
+        ${d.kind === "scale" ? `        <label>Port-Auswahl<select data-f="portmode">
+          <option value="path" ${mode === "path" ? "selected" : ""}>Pfad (/dev/…, COM…)</option>
+          <option value="match" ${mode === "match" ? "selected" : ""}>USB-Merkmale (VID/PID)</option></select></label>
+        <label class="${mode === "path" ? "" : "hidden"}">Pfad<input data-f="path" list="dl-${i}" value="${esc(d.port && d.port.path)}" placeholder="/dev/waage oder COM5">
+          <datalist id="dl-${i}">${portOptions().map((o) => `<option value="${esc(o)}">`).join("")}</datalist></label>
+        <label class="${mode === "match" ? "" : "hidden"}">USB-Gerät<select data-f="usb">
+          <option value="">${m.vid ? `${esc(m.vid)}:${esc(m.pid)} ${esc(m.serial || "")}` : "– wählen –"}</option>
+          ${usb.map((p, j) => `<option value="${j}">${esc(p.name)} · ${esc(p.vid)}:${esc(p.pid)} ${esc(p.serial || "")} ${esc(p.product || "")}</option>`).join("")}</select></label>
+        <label>Baud<select data-f="baud">${[1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200].map((b) => `<option ${b === d.baud ? "selected" : ""}>${b}</option>`).join("")}</select></label>
+        <label>Abfrage alle (ms)<input data-f="poll_ms" type="number" min="50" max="10000" value="${d.poll_ms || 250}"></label>
+        <label>Stabil nach n gleichen Werten<input data-f="stable_samples" type="number" min="1" max="50" value="${d.stable_samples || 4}"></label>
+        <label>Toleranz (kg)<input data-f="stable_tolerance_kg" type="number" step="0.001" min="0" value="${d.stable_tolerance_kg ?? 0.005}"></label>` : `<p class="muted small" style="grid-column:1/-1">Geräteklasse ${esc(d.kind)}: Einstellungen folgen mit dem Treiber (Kamera Phase 2, Scanner Phase 3). Bis dahin nur ID und Treiber.</p>`}
+      </div>
+      <div class="small" data-out="test"></div>
+    </div>`;
+  }).join("");
+}
+
+$("c-devices").addEventListener("input", onDeviceEdit);
+$("c-devices").addEventListener("change", onDeviceEdit);
+function onDeviceEdit(ev) {
+  const card = ev.target.closest(".device");
+  if (!card) return;
+  const d = cfg.devices[+card.dataset.i];
+  const f = ev.target.dataset.f;
+  const v = ev.target.value;
+  d.port = d.port || {};
+  switch (f) {
+    case "id": d.id = v.trim(); card.querySelector(".device-head b").textContent = d.id || "neues Gerät"; renderScaleSelect($("h-scale").value); return;
+    case "driver": d.driver = v; return;
+    case "path": d.port = { path: v.trim() }; return;
+    case "portmode":
+      d.port = v === "match" ? { match: d.port.match || { vid: "", pid: "" } } : { path: d.port.path || "" };
+      if (ev.type === "change") renderDevices();
+      return;
+    case "usb": {
+      const p = ports.filter((x) => x.is_usb)[+v];
+      if (p) d.port = { match: { vid: p.vid, pid: p.pid, serial: p.serial || "" } };
+      return;
+    }
+    case "baud": case "poll_ms": case "stable_samples": d[f] = parseInt(v, 10) || 0; return;
+    case "stable_tolerance_kg": d[f] = parseFloat(v) || 0; return;
+  }
+}
+$("c-devices").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button[data-act]");
+  if (!btn) return;
+  const card = btn.closest(".device");
+  const d = cfg.devices[+card.dataset.i];
+  if (btn.dataset.act === "remove") {
+    cfg.devices.splice(+card.dataset.i, 1);
+    renderDevices(); renderScaleSelect($("h-scale").value);
+    return;
+  }
+  const out = card.querySelector('[data-out="test"]');
+  out.innerHTML = '<span class="muted">Messe…</span>';
+  const r = await api("POST", `/api/devices/${encodeURIComponent(d.id)}/test`);
+  if (r.data.ok) {
+    const x = r.data.result;
+    out.innerHTML = `<div class="notice n-ok">Antwort: <b>${x.kg.toFixed(3)} kg</b> (roh „${esc(x.raw)}“)</div>`;
+  } else {
+    const e = r.data.error || {};
+    out.innerHTML = `<div class="notice n-err">${esc(e.message || "Fehler")} <span class="muted">[${esc(e.code)}]</span>. Test läuft gegen die gespeicherte Konfiguration.</div>`;
+  }
+});
+
+$("add-scale").addEventListener("click", () => {
+  const n = cfg.devices.filter((d) => d.kind === "scale").length;
+  cfg.devices.push({ id: n ? `waage${n + 1}` : "waage", kind: "scale", driver: (drivers.scale || ["pce_pb"])[0],
+    port: { path: "" }, baud: 9600, poll_ms: 250, stable_samples: 4, stable_tolerance_kg: 0.005 });
+  renderDevices(); renderScaleSelect($("h-scale").value);
+});
+$("rescan").addEventListener("click", async () => { await loadPorts(); renderDevices(); });
+$("reload").addEventListener("click", () => { $("cfg-notices").innerHTML = ""; loadConfig(); });
+for (const id of ["h-enabled", "h-listen", "h-user"]) $(id).addEventListener("input", compatWarning);
+
+function compatWarning() {
+  const listen = $("h-listen").value.trim();
+  const local = /^(127\.|\[::1\]|localhost)/i.test(listen);
+  $("h-warn").innerHTML = $("h-enabled").checked && !local && !$("h-user").value.trim()
+    ? '<div class="notice n-warn" style="margin-top:10px">Die Route lauscht im Netz ohne Basic-Auth. Das ist nur in Ordnung, wenn ein Reverse Proxy davor authentifiziert.</div>' : "";
+}
+
+$("save").addEventListener("click", async () => {
+  const body = {
+    station: $("c-station").value.trim(),
+    listen_port: parseInt($("c-port").value, 10) || 0,
+    allowed_origins: $("c-origins").value.split(/\s+/).map((s) => s.trim()).filter(Boolean),
+    token: $("c-token").value,
+    log_level: $("c-loglevel").value,
+    devices: cfg.devices,
+    http_compat: {
+      enabled: $("h-enabled").checked,
+      listen: $("h-listen").value.trim(),
+      basic_auth: { user: $("h-user").value.trim(), password: $("h-pass").value },
+      scale_device: $("h-scale").value,
+      legacy_upstream: $("h-upstream").value.trim(),
+    },
+  };
+  const r = await api("PUT", "/api/config", body);
+  if (r.ok) {
+    $("cfg-notices").innerHTML = '<div class="notice n-ok">Gespeichert und angewendet.' +
+      (r.data.restart_required ? " Der neue WS-Port gilt erst nach Neustart des Dienstes." : "") + "</div>";
+    loadConfig();
+  } else {
+    $("cfg-notices").innerHTML = '<div class="notice n-err"><b>Nicht gespeichert:</b><ul>' +
+      (r.data.errors || [String(r.status)]).map((e) => `<li>${esc(e)}</li>`).join("") + "</ul></div>";
+  }
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
+// Direktlink aus dem Desk: http://localhost:8735/#config
+const initial = document.querySelector(`nav button[data-tab="${location.hash.slice(1)}"]`);
+if (initial) initial.click();
+refreshStatus();
+setInterval(() => { if (tab === "status") refreshStatus(); if (tab === "log") refreshLog(); }, 1000);
+</script>
+</body>
+</html>
