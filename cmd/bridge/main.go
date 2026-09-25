@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/kardianos/service"
@@ -107,21 +108,7 @@ func main() {
 	if *logPath != "" {
 		args = append(args, "-log-file", *logPath)
 	}
-	svc, err := service.New(prg, &service.Config{
-		Name:        serviceName,
-		DisplayName: "ERPNext Hardware Bridge",
-		Description: "Stellt Waage, Kamera, Scanner und Terminal dem ERPNext-Desk per lokalem WebSocket bereit.",
-		Arguments:   args,
-		UserName:    *user,
-		Dependencies: []string{
-			"After=network.target",
-		},
-		Option: service.KeyValue{
-			"Restart":          "always",
-			"OnFailure":        "restart", // Windows
-			"DelayedAutoStart": false,
-		},
-	})
+	svc, err := service.New(prg, serviceConfig(runtime.GOOS, args, *user))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -149,4 +136,27 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// serviceConfig beschreibt den Dienst. Dependencies sind plattformabhängig:
+// unter systemd sind es Unit-Zeilen, unter Windows Namen anderer Dienste. Ein
+// "After=network.target" unter Windows verhindert den Start mit
+// "Abhängigkeitsdienst ist nicht vorhanden" (Fehler 1075).
+func serviceConfig(goos string, args []string, user string) *service.Config {
+	c := &service.Config{
+		Name:        serviceName,
+		DisplayName: "ERPNext Hardware Bridge",
+		Description: "Stellt Waage, Kamera, Scanner und Terminal dem ERPNext-Desk per lokalem WebSocket bereit.",
+		Arguments:   args,
+		UserName:    user,
+		Option: service.KeyValue{
+			"Restart":          "always",  // systemd
+			"OnFailure":        "restart", // Windows
+			"DelayedAutoStart": false,
+		},
+	}
+	if goos == "linux" {
+		c.Dependencies = []string{"After=network.target"}
+	}
+	return c
 }
