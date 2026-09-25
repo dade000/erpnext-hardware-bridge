@@ -22,6 +22,16 @@ Konzept und Entscheidungen: [docs/KONZEPT.md](docs/KONZEPT.md).
 
 ## Schnellstart
 
+Fertige Binaries liegen unter **Releases** im GitHub-Repo
+(`erpnext-hardware-bridge-<version>-linux-arm64`, `…-windows-amd64.exe` usw.).
+Ein neues Release entsteht automatisch mit jedem Tag:
+
+```sh
+git tag -a v0.2.0 -m "…" && git push origin v0.2.0
+```
+
+Selbst bauen geht auch:
+
 ```sh
 scripts/build.sh                                   # Binaries nach dist/
 sudo scripts/install-linux.sh dist/erpnext-hardware-bridge-<version>-linux-arm64
