@@ -1,0 +1,35 @@
+name: Release
+
+# Ein Tag wie v0.1.0 baut alle Binaries und legt ein GitHub-Release an.
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: Build
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: scripts/build.sh
+      - name: Release anlegen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          gh release create "$VERSION" dist/* \
+            --title "$VERSION" \
+            --notes "Binaries für Linux (amd64, arm64, armv7) und Windows (amd64). Installation: siehe README. Prüfsummen in SHA256SUMS-$VERSION."
