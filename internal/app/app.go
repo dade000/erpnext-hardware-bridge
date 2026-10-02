@@ -20,6 +20,8 @@ import (
 	"erpnext-hardware-bridge/internal/netutil"
 	"erpnext-hardware-bridge/internal/printer"
 	"erpnext-hardware-bridge/internal/scale/pce"
+	"erpnext-hardware-bridge/internal/update"
+	"erpnext-hardware-bridge/internal/version"
 	"erpnext-hardware-bridge/internal/ws"
 )
 
@@ -35,6 +37,12 @@ type App struct {
 	bus *device.Bus
 	mgr *device.Manager
 	ws  *ws.Server
+	upd *update.Updater
+
+	// restart beendet den Prozess so, dass der Dienstverwalter ihn neu
+	// startet; nil, wenn die Bridge nicht als Dienst läuft.
+	restart func()
+	stop    chan struct{}
 
 	boundPort int
 	loopback  []*http.Server
@@ -48,7 +56,8 @@ type App struct {
 
 // New baut die Bridge, startet aber noch nichts.
 func New(path string, cfg *config.Config, exists bool, log *slog.Logger, level *slog.LevelVar, ring *logbuf.Ring) *App {
-	a := &App{path: path, log: log, level: level, ring: ring, bus: device.NewBus()}
+	a := &App{path: path, log: log, level: level, ring: ring, bus: device.NewBus(), stop: make(chan struct{})}
+	a.upd = update.New(version.Version)
 	a.cfg.Store(cfg)
 	a.exists.Store(exists)
 	a.mgr = device.NewManager(a.bus, log)
@@ -87,11 +96,51 @@ func (a *App) Start() error {
 	if !a.ConfigExists() {
 		a.log.Warn("Noch keine Konfiguration – Bridge über die Oberfläche einrichten", "path", a.path)
 	}
+	go a.updateLoop()
 	return nil
 }
 
+// updateLoop fragt kurz nach dem Start und danach einmal am Tag nach einem
+// neuen Release. Es wird nur gefragt, nie installiert; die Oberfläche zeigt
+// den Hinweis. Selbst gebaute Versionen fragen nicht von selbst.
+func (a *App) updateLoop() {
+	if a.upd.Status().Development {
+		return
+	}
+	wait := time.Minute
+	for {
+		select {
+		case <-a.stop:
+			return
+		case <-time.After(wait):
+		}
+		wait = 24 * time.Hour
+		if a.Config().NoUpdateCheck {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		info, err := a.upd.Check(ctx)
+		cancel()
+		switch {
+		case err != nil:
+			a.log.Info("Update-Prüfung nicht möglich", "err", err)
+		case info.Available:
+			a.log.Info("Neue Version verfügbar", "current", info.Current, "latest", info.Latest)
+		}
+	}
+}
+
+// SetRestart übergibt, wie der Prozess für einen Neustart durch den
+// Dienstverwalter beendet wird.
+func (a *App) SetRestart(fn func()) { a.restart = fn }
+
 // Shutdown beendet alles geordnet.
 func (a *App) Shutdown(ctx context.Context) {
+	select {
+	case <-a.stop:
+	default:
+		close(a.stop)
+	}
 	for _, s := range a.loopback {
 		_ = s.Shutdown(ctx)
 	}
@@ -196,6 +245,17 @@ func (a *App) ConfigExists() bool       { return a.exists.Load() }
 func (a *App) Manager() *device.Manager { return a.mgr }
 func (a *App) WS() *ws.Server           { return a.ws }
 func (a *App) Logs() []string           { return a.ring.Lines() }
+func (a *App) Updater() *update.Updater { return a.upd }
+
+// Restart startet den Dienst neu, wenn die Bridge als Dienst läuft.
+func (a *App) Restart() bool {
+	if a.restart == nil {
+		return false
+	}
+	a.log.Info("Dienst wird neu gestartet")
+	a.restart()
+	return true
+}
 
 // Status liefert alles, was die Statusseite anzeigt.
 func (a *App) Status() map[string]any {
@@ -210,6 +270,7 @@ func (a *App) Status() map[string]any {
 		"restart_required": a.RestartRequired(),
 		"warnings":         warns,
 		"devices":          a.mgr.Statuses(),
+		"update":           a.upd.Status(),
 		"clients":          a.ws.Clients(),
 		"config":           map[string]any{"allowed_origins": c.AllowedOrigins, "http_compat_enabled": c.HTTPCompat.Enabled},
 	}

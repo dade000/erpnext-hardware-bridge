@@ -20,8 +20,14 @@
  *   hw.on("scale.weight", (w) => …);          // {kg, raw, stable, unit, ts}
  *   hw.subscribe("scale");                     // bleibt über Reconnects bestehen
  *   const w = await hw.call("scale.read");
- *   hw.devicesOfKind("printer");               // [{id, kind, driver, state, …}]
+ *   hw.devicesOfKind("printer");               // [{id, kind, driver, state, formats, default, …}]
  *   await hw.print("labeldrucker", base64Zpl, "SHIPMENT-00150");
+ *   hw.defaultPrinter("pdf");                  // Standarddrucker des Arbeitsplatzes für PDF
+ *   await hw.print(null, base64Pdf, "SAL-ORD-2026-01224", "pdf");
+ *
+ * Seiten, die die Bridge nur gelegentlich brauchen (Schnelldruck im Desk),
+ * rufen nach dem ersten Fehlschlag standby(): dann wird nicht weiter
+ * versucht, bis jemand retry() ruft. So bleibt ein PC ohne Bridge ruhig.
  */
 (function (root) {
 	"use strict";
@@ -51,6 +57,7 @@
 		this._attempt = 0;
 		this._timer = null;
 		this._closed = false;
+		this._standby = false;
 		this._lastError = "";
 	}
 
@@ -107,6 +114,26 @@
 			if (this.devices[id].kind === kind) out.push(this.devices[id]);
 		}
 		return out;
+	};
+
+	/** Online-Drucker, die dieses Format annehmen ("zpl", "pdf"). */
+	P.printersFor = function (format) {
+		return this.devicesOfKind("printer").filter(function (d) {
+			return d.state === "online" && (d.formats || []).indexOf(format) !== -1;
+		});
+	};
+
+	/**
+	 * Der Drucker, den die Bridge für einen Auftrag ohne Geräteangabe nimmt:
+	 * der Standarddrucker des Arbeitsplatzes für dieses Format, sonst der
+	 * erste passende. null, wenn es keinen gibt.
+	 */
+	P.defaultPrinter = function (format) {
+		var list = this.printersFor(format);
+		for (var i = 0; i < list.length; i++) {
+			if (list[i].default) return list[i];
+		}
+		return list[0] || null;
 	};
 
 	/** Zustand aus Sicht einer Seite, die ein Gerät dieser Klasse braucht. */
@@ -174,6 +201,8 @@
 					d.kind = m.data.kind || d.kind;
 					d.state = m.data.state;
 					d.message = m.data.message;
+					if (m.data.formats) d.formats = m.data.formats;
+					d.default = !!m.data.default;
 					if (d.state === "disabled") delete self.devices[m.device];
 					else self.devices[m.device] = d;
 					self._emit("devices", self.devices);
@@ -214,15 +243,24 @@
 		var self = this;
 		this._ws = null;
 		this._setState("no_bridge", why);
-		if (this._closed) return;
+		// Erst nach dem Zustandswechsel prüfen: ein Handler darf darin
+		// standby() rufen.
+		if (this._closed || this._standby) return;
 		var wait = BACKOFF_MS[Math.min(this._attempt, BACKOFF_MS.length - 1)];
 		this._attempt++;
 		clearTimeout(this._timer);
 		this._timer = setTimeout(function () { self.connect(); }, wait);
 	};
 
-	/** Sofort neu versuchen (z.B. Knopf „Erneut verbinden“). */
+	/** Nicht weiter verbinden, bis retry() gerufen wird. */
+	P.standby = function () {
+		this._standby = true;
+		clearTimeout(this._timer);
+	};
+
+	/** Sofort neu versuchen (z.B. Knopf „Erneut verbinden“); beendet standby. */
 	P.retry = function () {
+		this._standby = false;
 		this._attempt = 0;
 		clearTimeout(this._timer);
 		if (!this._ws) this.connect();

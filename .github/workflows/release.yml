@@ -25,6 +25,14 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
         run: scripts/build.sh
+      # Die Bridges nehmen ein Update nur an, wenn die Prüfsummen-Datei mit
+      # dem Schlüssel aus dem Secret unterschrieben ist. Ohne Secret gibt es
+      # kein Release.
+      - name: Prüfsummen signieren
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          VERSION: ${{ github.ref_name }}
+        run: go run ./cmd/relsign sign "dist/SHA256SUMS-$VERSION"
       - name: Release anlegen
         env:
           GH_TOKEN: ${{ github.token }}
@@ -32,4 +40,4 @@ jobs:
         run: |
           gh release create "$VERSION" dist/* \
             --title "$VERSION" \
-            --notes "Binaries für Linux (amd64, arm64, armv7) und Windows (amd64). Installation: siehe README. Prüfsummen in SHA256SUMS-$VERSION."
+            --notes "Binaries für Linux (amd64, arm64, armv7) und Windows (amd64). Installation: siehe README. Prüfsummen in SHA256SUMS-$VERSION, signiert (SHA256SUMS-$VERSION.sig)."

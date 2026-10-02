@@ -7,7 +7,10 @@ import (
 )
 
 // tcpSink druckt über Port 9100 (RAW/JetDirect) auf einen Netzwerkdrucker.
-type tcpSink struct{ addr string }
+type tcpSink struct {
+	rawOnly
+	addr string
+}
 
 func (s *tcpSink) Target() string { return "tcp " + s.addr }
 
@@ -24,7 +27,8 @@ func (s *tcpSink) Check(ctx context.Context) error {
 	return c.Close()
 }
 
-func (s *tcpSink) Write(ctx context.Context, _ string, data []byte) error {
+func (s *tcpSink) Write(ctx context.Context, job Job) error {
+	data := job.Data
 	c, err := s.dial(ctx)
 	if err != nil {
 		return err

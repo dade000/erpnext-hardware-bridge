@@ -12,7 +12,10 @@ import (
 
 // systemSink druckt roh über den Windows-Spooler (Datentyp RAW), also am
 // Druckertreiber vorbei direkt in die Sprache des Druckers.
-type systemSink struct{ queue string }
+type systemSink struct {
+	rawOnly
+	queue string
+}
 
 func newSystemSink(queue string) Sink { return &systemSink{queue: queue} }
 
@@ -61,7 +64,8 @@ func (s *systemSink) Check(context.Context) error {
 	return nil
 }
 
-func (s *systemSink) Write(_ context.Context, title string, data []byte) error {
+func (s *systemSink) Write(_ context.Context, job Job) error {
+	title, data := job.Title, job.Data
 	h, err := s.open()
 	if err != nil {
 		return err

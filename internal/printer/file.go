@@ -8,7 +8,10 @@ import (
 
 // fileSink schreibt in eine Gerätedatei, z.B. /dev/usb/lp0 (USB-Drucker
 // unter Linux ohne Druckwarteschlange).
-type fileSink struct{ path string }
+type fileSink struct {
+	rawOnly
+	path string
+}
 
 func (s *fileSink) Target() string { return s.path }
 
@@ -22,7 +25,8 @@ func (s *fileSink) Check(context.Context) error {
 	return err
 }
 
-func (s *fileSink) Write(ctx context.Context, _ string, data []byte) error {
+func (s *fileSink) Write(ctx context.Context, job Job) error {
+	data := job.Data
 	f, err := os.OpenFile(s.path, os.O_WRONLY, 0)
 	if err != nil {
 		return err

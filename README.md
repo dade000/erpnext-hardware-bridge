@@ -19,7 +19,7 @@ Konzept und Entscheidungen: [docs/KONZEPT.md](docs/KONZEPT.md).
 | 1 | Waage PCE-PB (Live-Gewicht, Lesen, Tara), `/weight` im Flask-Format, Browser-Client | fertig |
 | 2 | Kamera (libgphoto2, nur Linux) | offen – bis dahin reicht die Bridge `/shot` und `/health` an die Flask-App weiter |
 | 3 | Serieller Scanner, Terminal-Tunnel | offen |
-| 4 | Druckmodul: Labels roh (ZPL) auf den Drucker der Station | gebaut; Netzwerkdrucker und Gerätedatei getestet, Betriebssystem-Warteschlange (CUPS, Windows-Spooler) nur kompiliert |
+| 4 | Druckmodul: Labels roh (ZPL) und PDFs über IPP/IPPS auf Drucker der Station, Standarddrucker für den Schnelldruck im Desk | gebaut; Netzwerkdrucker, Gerätedatei und IPP gegen Attrappen getestet, IPP-Abfrage gegen einen echten CUPS-Server; Betriebssystem-Warteschlange (CUPS, Windows-Spooler) nur kompiliert, an keinem echten Drucker gedruckt |
 
 ## Schnellstart
 
@@ -43,6 +43,9 @@ Danach auf **demselben Rechner** `http://localhost:8735/` öffnen und unter
 Waage hinzufügen, Port wählen, speichern, »Testen«. Änderungen wirken sofort,
 ohne Neustart (außer beim Port der WS-API).
 
+Linux: Das Skript legt das Programm nach `/opt/erpnext-hardware-bridge/`
+(gehört dem Dienstbenutzer, damit Updates aus der Oberfläche gehen).
+
 Windows: Binary nach `C:\Program Files\ERPNextHardwareBridge\` kopieren und
 in einer Administrator-Konsole `erpnext-hardware-bridge.exe -service install`
 und `-service start` ausführen. Konfiguration liegt unter
@@ -53,6 +56,20 @@ Ohne Dienst zum Ausprobieren:
 ```sh
 go run ./cmd/bridge -config ./bridge.yaml
 ```
+
+## Updates
+
+In der Oberfläche unter **Status → Version & Update**: »Auf Updates prüfen«
+zeigt die neueste Version, »installieren« lädt sie, prüft die Signatur und
+startet den Dienst neu. Die vorige Version bleibt als `….old` neben dem
+Programm und lässt sich mit einem Knopf wiederherstellen. Einmal täglich
+fragt die Bridge von selbst nach (abschaltbar), installiert aber nie
+ungefragt.
+
+Releases sind mit Ed25519 signiert. Der private Schlüssel liegt als
+GitHub-Secret `RELEASE_SIGNING_KEY` im Repo, der öffentliche in
+`internal/update/pubkey.go`. Ohne das Secret schlägt der Release-Lauf fehl.
+Einzelheiten in [docs/KONZEPT.md](docs/KONZEPT.md), Abschnitt 18.
 
 ## Konfiguration
 
@@ -81,6 +98,15 @@ devices:
     address: 192.168.1.60:9100
     # port: /dev/usb/lp0          # raw_file: Gerätedatei
     # queue: Zebra_ZD421          # system: Drucker des Betriebssystems, roh
+  - id: buero
+    kind: printer
+    driver: ipp                   # IPP/IPPS-Drucker oder CUPS-Server
+    uri: ipps://drucker.lan/ipp/print
+    insecure_tls: true            # selbstsigniertes Zertifikat des Druckers
+    accept: pdf                   # nur PDF (leer = was der Drucker meldet)
+    default: true                 # Standarddrucker dieses Arbeitsplatzes
+    # media: iso_a4_210x297mm     # optional
+    # print_scaling: fit          # optional
 http_compat:
   enabled: true
   listen: ":5000"                 # IPv4 und IPv6
@@ -131,11 +157,20 @@ Methoden: `hello`, `devices.list`, `bridge.info`, `scale.subscribe`,
 ```
 
 Die Bridge reicht die Daten unverändert an den Drucker weiter; sie rendert
-nichts und wandelt nichts um. Der Drucker muss die Sprache selbst verstehen
-(ZPL). Anderes als `zpl`/`raw` lehnt sie mit `unsupported_format` ab – ein
-PDF druckt das Desk über den Dialog des Browsers. Ohne `device` nimmt sie
-den ersten Drucker der Station. Hintergrund in
-[docs/KONZEPT.md](docs/KONZEPT.md), Abschnitt 16.
+nichts und wandelt nichts um. Der Drucker muss das Format selbst verstehen:
+ZPL die Rohdrucker, PDF ein IPP-Drucker, der `application/pdf` meldet. Was
+ein Drucker nicht annimmt, lehnt die Bridge mit `unsupported_format` ab.
+Jeder Drucker nennt in der Geräteliste seine `formats`.
+
+Ohne `device` nimmt die Bridge den Standarddrucker des Arbeitsplatzes für
+dieses Format (`default: true`), sonst den ersten passenden – so druckt der
+Schnelldruck im Desk ein PDF, ohne einen Drucker zu kennen:
+
+```
+→ {"id":4,"type":"req","method":"printer.print","params":{"format":"pdf","title":"SAL-ORD-2026-01224","data":"<base64>"}}
+```
+
+Hintergrund in [docs/KONZEPT.md](docs/KONZEPT.md), Abschnitte 16 und 17.
 
 Hinweis zu Chrome: Der Zugriff einer https-Seite auf `localhost` braucht die
 Freigabe »Geräte im lokalen Netzwerk« (einmalige Abfrage des Browsers oder

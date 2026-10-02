@@ -32,6 +32,10 @@ type Status struct {
 	Since   time.Time `json:"since"`
 	Last    any       `json:"last,omitempty"`
 	Stats   any       `json:"stats,omitempty"`
+	// Drucker: Formate, die er annimmt ("zpl", "pdf"), und ob er der
+	// Standarddrucker dieses Arbeitsplatzes ist.
+	Formats []string `json:"formats,omitempty"`
+	Default bool     `json:"default,omitempty"`
 }
 
 // Event geht an alle Abonnenten des Busses.
@@ -154,7 +158,14 @@ func (h *StatusHolder) Update(fn func(*Status)) {
 }
 
 func stateData(s Status) map[string]any {
-	return map[string]any{"kind": s.Kind, "state": s.State, "message": s.Message}
+	d := map[string]any{"kind": s.Kind, "state": s.State, "message": s.Message}
+	if len(s.Formats) > 0 {
+		d["formats"] = s.Formats
+	}
+	if s.Default {
+		d["default"] = true
+	}
+	return d
 }
 
 // StateEvent baut das device.state-Event für einen Status, z.B. beim

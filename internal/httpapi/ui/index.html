@@ -83,6 +83,17 @@ pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-hei
       <h2>Verbundene Clients</h2>
       <table><thead><tr><th>Client</th><th>Origin</th><th>Seit</th><th>Abonniert</th></tr></thead><tbody id="clients"></tbody></table>
     </section>
+    <section class="panel">
+      <h2>Version &amp; Update</h2>
+      <p id="upd-line">…</p>
+      <div id="upd-notes" class="muted small hidden" style="white-space:pre-wrap;margin-bottom:10px"></div>
+      <div id="upd-msg"></div>
+      <div class="row">
+        <button class="btn" id="upd-check">Auf Updates prüfen</button>
+        <button class="btn primary hidden" id="upd-install">Update installieren</button>
+        <button class="btn hidden" id="upd-rollback">Vorige Version wiederherstellen</button>
+      </div>
+    </section>
   </div>
 
   <div id="tab-config" class="hidden">
@@ -95,6 +106,7 @@ pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-hei
         <label>Log-Level<select id="c-loglevel"><option>debug</option><option>info</option><option>warn</option><option>error</option></select></label>
         <label>Token (optional)<input id="c-token" type="password" autocomplete="new-password" placeholder="leer = kein Token"></label>
       </div>
+      <label class="check" style="margin-bottom:10px"><input type="checkbox" id="c-updcheck">Einmal täglich nach einer neuen Version fragen (installiert wird nur auf Knopfdruck)</label>
       <p class="muted small">Die WS-API bindet immer 127.0.0.1 und ::1. Das Desk erwartet Port 8735; ein anderer Port muss auch im Desk geändert werden und braucht einen Neustart des Dienstes.</p>
       <label>Erlaubte Origins (eine pro Zeile, z.B. https://erp.holzschuhe.at)<textarea id="c-origins" spellcheck="false"></textarea></label>
     </section>
@@ -203,16 +215,87 @@ async function refreshStatus() {
   if (!(s.config.allowed_origins || []).length) notes.push('<div class="notice n-err">Keine erlaubten Origins – kein Desk kann sich verbinden.</div>');
   $("status-notices").innerHTML = notes.join("");
   $("devices").innerHTML = s.devices.length ? s.devices.map((d) => `<tr>
-      <td><b>${esc(d.id)}</b><div class="muted small">${esc(d.kind)} / ${esc(d.driver)}</div></td>
+      <td><b>${esc(d.id)}</b>${d.default ? ' <span class="badge b-online">Standard</span>' : ""}<div class="muted small">${esc(d.kind)} / ${esc(d.driver)}${(d.formats || []).length ? " · " + esc(d.formats.join(", ").toUpperCase()) : ""}</div></td>
       <td><span class="badge b-${esc(d.state)}">${esc(STATE_DE[d.state] || d.state)}</span>${d.message ? `<div class="small">${esc(d.message)}</div>` : ""}</td>
       <td>${fmtLast(d)}${fmtStats(d.stats)}</td>
       <td class="small">${esc(d.port)}</td></tr>`).join("")
     : '<tr><td colspan="4" class="muted">Keine Geräte eingerichtet.</td></tr>';
+  renderUpdate(s.update);
   $("clients").innerHTML = s.clients.length ? s.clients.map((c) => `<tr>
       <td>${esc(c.client || "?")}</td><td class="small">${esc(c.origin)}</td>
       <td class="small">${new Date(c.since).toLocaleTimeString()}</td><td class="small">${esc((c.subscribed || []).join(", ")) || "–"}</td></tr>`).join("")
     : '<tr><td colspan="4" class="muted">Kein Desk verbunden.</td></tr>';
 }
+
+// ---------- Update ----------
+let updBusy = false;
+function renderUpdate(u) {
+  if (!u || updBusy) return;
+  const parts = [`Installiert: <b>${esc(u.current)}</b>`];
+  if (u.development) parts.push("selbst gebaute Version");
+  if (u.latest) {
+    parts.push(u.available ? `<b>${esc(u.latest)}</b> ist verfügbar` : "aktuell");
+  }
+  if (u.checked_at && !u.checked_at.startsWith("0001")) parts.push(`geprüft ${new Date(u.checked_at).toLocaleString()}`);
+  $("upd-line").innerHTML = parts.join(" · ");
+  const notes = $("upd-notes");
+  notes.classList.toggle("hidden", !(u.available && u.notes));
+  notes.textContent = u.available ? u.notes || "" : "";
+  $("upd-install").classList.toggle("hidden", !(u.available && u.can_install));
+  $("upd-install").textContent = `${u.latest || "Update"} installieren`;
+  $("upd-rollback").classList.toggle("hidden", !u.previous);
+  const hints = [];
+  if (u.error) hints.push(`<div class="notice n-warn">Prüfung nicht möglich: ${esc(u.error)}</div>`);
+  if (u.available && !u.can_install && u.install_hint) hints.push(`<div class="notice n-warn">${esc(u.install_hint)}</div>`);
+  if (!$("upd-msg").dataset.sticky) $("upd-msg").innerHTML = hints.join("");
+}
+function updMessage(html) {
+  $("upd-msg").dataset.sticky = "1";
+  $("upd-msg").innerHTML = html;
+}
+async function updAction(path, working) {
+  updBusy = true;
+  for (const id of ["upd-check", "upd-install", "upd-rollback"]) $(id).disabled = true;
+  updMessage(`<div class="notice n-ok">${working}</div>`);
+  let r;
+  try { r = await api("POST", path); } finally {
+    updBusy = false;
+    for (const id of ["upd-check", "upd-install", "upd-rollback"]) $(id).disabled = false;
+  }
+  return r;
+}
+// Nach einem Neustart meldet sich die Bridge mit der neuen Version zurück.
+async function waitForRestart(text) {
+  updMessage(`<div class="notice n-ok">${text} Die Bridge startet neu …</div>`);
+  for (let i = 0; i < 40; i++) {
+    await new Promise((res) => setTimeout(res, 1500));
+    try {
+      const r = await api("GET", "/api/status");
+      if (r.ok && r.data.bridge.uptime_s < 30) { location.reload(); return; }
+    } catch { /* noch nicht wieder da */ }
+  }
+  updMessage('<div class="notice n-err">Die Bridge hat sich nach dem Neustart nicht gemeldet. Dienst prüfen; die vorige Version liegt neben dem Programm als „.old“.</div>');
+}
+$("upd-check").addEventListener("click", async () => {
+  const r = await updAction("/api/update/check", "Frage nach der neuesten Version …");
+  delete $("upd-msg").dataset.sticky;
+  $("upd-msg").innerHTML = "";
+  renderUpdate(r.data);
+});
+$("upd-install").addEventListener("click", async () => {
+  if (!confirm("Update jetzt installieren? Die Bridge startet danach neu; Waage und Drucker sind für einige Sekunden nicht erreichbar.")) return;
+  const r = await updAction("/api/update/install", "Lade herunter und prüfe die Signatur …");
+  if (!r.data.ok) { updMessage(`<div class="notice n-err"><b>Nicht installiert:</b> ${esc(r.data.error || r.status)}</div>`); return; }
+  if (r.data.restarting) { waitForRestart(`${esc(r.data.version)} ist eingespielt.`); return; }
+  updMessage(`<div class="notice n-ok">${esc(r.data.version)} ist eingespielt. Die Bridge läuft nicht als Dienst – bitte von Hand neu starten.</div>`);
+});
+$("upd-rollback").addEventListener("click", async () => {
+  if (!confirm("Vorige Version wiederherstellen? Die Bridge startet danach neu.")) return;
+  const r = await updAction("/api/update/rollback", "Stelle die vorige Version wieder her …");
+  if (!r.data.ok) { updMessage(`<div class="notice n-err">${esc(r.data.error || r.status)}</div>`); return; }
+  if (r.data.restarting) { waitForRestart("Vorige Version ist wieder eingesetzt."); return; }
+  updMessage('<div class="notice n-ok">Vorige Version ist wieder eingesetzt. Bitte die Bridge von Hand neu starten.</div>');
+});
 
 // ---------- Log ----------
 async function refreshLog() {
@@ -233,9 +316,10 @@ async function loadQueues() {
 }
 
 const PRINTER_DRIVERS = {
-  raw_tcp: "Netzwerkdrucker (Port 9100)",
-  raw_file: "Gerätedatei (z.B. /dev/usb/lp0)",
-  system: "Drucker des Betriebssystems (roh)",
+  raw_tcp: "Netzwerkdrucker roh (Port 9100, ZPL)",
+  raw_file: "Gerätedatei roh (z.B. /dev/usb/lp0, ZPL)",
+  system: "Drucker des Betriebssystems (roh, ZPL)",
+  ipp: "IPP/IPPS-Drucker (PDF, auch CUPS-Server)",
 };
 
 function printerFields(d, i) {
@@ -247,8 +331,23 @@ function printerFields(d, i) {
     case "system":
       return `<label>Druckername<input data-f="queue" list="dq-${i}" value="${esc(d.queue)}" placeholder="Name im Betriebssystem">
           <datalist id="dq-${i}">${queues.map((q) => `<option value="${esc(q)}">`).join("")}</datalist></label>`;
+    case "ipp":
+      return `<label style="grid-column:span 2">Adresse<input data-f="uri" value="${esc(d.uri)}" placeholder="ipps://drucker.lan/ipp/print"></label>
+        <label>Verwendung<select data-f="accept">
+          <option value="" ${!d.accept ? "selected" : ""}>wie vom Drucker gemeldet</option>
+          <option value="pdf" ${d.accept === "pdf" ? "selected" : ""}>Dokumente (PDF)</option>
+          <option value="zpl" ${d.accept === "zpl" ? "selected" : ""}>Etiketten roh (ZPL)</option></select></label>
+        <label>Papier (optional)<input data-f="media" value="${esc(d.media)}" placeholder="z.B. iso_a4_210x297mm"></label>
+        <label>Skalierung (optional)<select data-f="print_scaling">${["", "auto", "auto-fit", "fit", "fill", "none"].map((x) => `<option value="${x}" ${x === (d.print_scaling || "") ? "selected" : ""}>${x || "Vorgabe des Druckers"}</option>`).join("")}</select></label>
+        <label class="check"><input type="checkbox" data-f="insecure_tls" ${d.insecure_tls ? "checked" : ""}>Zertifikat nicht prüfen (ipps, selbstsigniert)</label>`;
   }
   return "";
+}
+
+function printerNote(d) {
+  return d.driver === "ipp"
+    ? "Der Drucker bekommt das Dokument unverändert samt Formatangabe und rendert selbst. PDF geht nur an Drucker, die PDF melden; ein CUPS-Server meldet für jede Warteschlange PDF und Rohdaten, deshalb unter „Verwendung“ festlegen, wofür der Drucker dahinter taugt."
+    : "Der Drucker bekommt die Daten roh, also in seiner eigenen Sprache (ZPL). Die Bridge verändert ein Label nicht. Für „Drucker des Betriebssystems“ muss der Drucker dort eingerichtet sein; gedruckt wird am Treiber vorbei.";
 }
 
 async function loadPorts() {
@@ -272,6 +371,7 @@ function renderConfig() {
   $("c-port").value = cfg.listen_port || 8735;
   $("c-loglevel").value = cfg.log_level || "info";
   $("c-token").value = cfg.token || "";
+  $("c-updcheck").checked = !cfg.no_update_check;
   $("c-origins").value = (cfg.allowed_origins || []).join("\n");
   const h = cfg.http_compat || {};
   $("h-enabled").checked = !!h.enabled;
@@ -310,7 +410,7 @@ function renderDevices() {
     return `<div class="device" data-i="${i}">
       <div class="device-head"><b>${esc(d.id || "neues Gerät")}</b>
         <div class="row">
-          <button class="btn" data-act="test">${d.kind === "printer" ? "Testetikett drucken" : "Testen"}</button>
+          <button class="btn" data-act="test">${d.kind === "printer" ? "Testdruck" : "Testen"}</button>
           <button class="btn danger" data-act="remove">Entfernen</button>
         </div>
       </div>
@@ -330,7 +430,8 @@ function renderDevices() {
         <label>Abfrage alle (ms)<input data-f="poll_ms" type="number" min="50" max="10000" value="${d.poll_ms || 250}"></label>
         <label>Stabil nach n gleichen Werten<input data-f="stable_samples" type="number" min="1" max="50" value="${d.stable_samples || 4}"></label>
         <label>Toleranz (kg)<input data-f="stable_tolerance_kg" type="number" step="0.001" min="0" value="${d.stable_tolerance_kg ?? 0.005}"></label>` : d.kind === "printer" ? `${printerFields(d, i)}
-        <p class="muted small" style="grid-column:1/-1">Der Drucker bekommt die Daten roh, also in seiner eigenen Sprache (ZPL). Die Bridge verändert ein Label nicht. Für „Drucker des Betriebssystems“ muss der Drucker dort eingerichtet sein; gedruckt wird am Treiber vorbei.</p>` : `<p class="muted small" style="grid-column:1/-1">Geräteklasse ${esc(d.kind)}: Einstellungen folgen mit dem Treiber (Kamera Phase 2, Scanner Phase 3). Bis dahin nur ID und Treiber.</p>`}
+        <label class="check" style="grid-column:1/-1"><input type="checkbox" data-f="default" ${d.default ? "checked" : ""}>Standarddrucker dieses Arbeitsplatzes (für den Schnelldruck im ERPNext, je Format einer)</label>
+        <p class="muted small" style="grid-column:1/-1">${printerNote(d)}</p>` : `<p class="muted small" style="grid-column:1/-1">Geräteklasse ${esc(d.kind)}: Einstellungen folgen mit dem Treiber (Kamera Phase 2, Scanner Phase 3). Bis dahin nur ID und Treiber.</p>`}
       </div>
       <div class="small" data-out="test"></div>
     </div>`;
@@ -355,6 +456,10 @@ function onDeviceEdit(ev) {
       return;
     case "address": d.address = v.trim(); return;
     case "queue": d.queue = v.trim(); return;
+    case "uri": d.uri = v.trim(); return;
+    case "media": d.media = v.trim(); return;
+    case "accept": case "print_scaling": d[f] = v; return;
+    case "insecure_tls": case "default": d[f] = ev.target.checked; return;
     case "path": d.port = { path: v.trim() }; return;
     case "portmode":
       d.port = v === "match" ? { match: d.port.match || { vid: "", pid: "" } } : { path: d.port.path || "" };
@@ -385,7 +490,7 @@ $("c-devices").addEventListener("click", async (ev) => {
   if (r.data.ok) {
     const x = r.data.result;
     out.innerHTML = d.kind === "printer"
-      ? `<div class="notice n-ok">Testetikett gesendet (${x.bytes} Bytes). Kommt nichts aus dem Drucker, stimmt der Anschluss oder die Druckersprache nicht.</div>`
+      ? `<div class="notice n-ok">${x.format === "pdf" ? "Testseite (PDF)" : "Testetikett (ZPL)"} gesendet (${x.bytes} Bytes). Kommt nichts aus dem Drucker, stimmt der Anschluss oder die Druckersprache nicht.</div>`
       : `<div class="notice n-ok">Antwort: <b>${x.kg.toFixed(3)} kg</b> (roh „${esc(x.raw)}“)</div>`;
   } else {
     const e = r.data.error || {};
@@ -423,6 +528,7 @@ $("save").addEventListener("click", async () => {
     allowed_origins: $("c-origins").value.split(/\s+/).map((s) => s.trim()).filter(Boolean),
     token: $("c-token").value,
     log_level: $("c-loglevel").value,
+    no_update_check: !$("c-updcheck").checked,
     devices: cfg.devices,
     http_compat: {
       enabled: $("h-enabled").checked,

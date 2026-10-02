@@ -12,7 +12,10 @@ import (
 )
 
 // systemSink druckt roh über eine CUPS-Warteschlange des Stations-PCs.
-type systemSink struct{ queue string }
+type systemSink struct {
+	rawOnly
+	queue string
+}
 
 func newSystemSink(queue string) Sink { return &systemSink{queue: queue} }
 
@@ -32,7 +35,8 @@ func (s *systemSink) Check(ctx context.Context) error {
 	return nil
 }
 
-func (s *systemSink) Write(ctx context.Context, title string, data []byte) error {
+func (s *systemSink) Write(ctx context.Context, job Job) error {
+	title, data := job.Title, job.Data
 	// -o raw: CUPS reicht die Daten ungefiltert durch.
 	cmd := exec.CommandContext(ctx, "lp", "-d", s.queue, "-o", "raw", "-t", title)
 	cmd.Stdin = bytes.NewReader(data)

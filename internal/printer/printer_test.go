@@ -22,30 +22,41 @@ type fakeSink struct {
 	mu       sync.Mutex
 	jobs     [][]byte
 	titles   []string
+	sent     []string // Format je Auftrag
+	formats  []string // leer = wie ein Rohdrucker
 	checkErr error
 	writeErr error
 }
 
 func (f *fakeSink) Target() string { return "fake" }
+func (f *fakeSink) Formats() []string {
+	if f.formats == nil {
+		return []string{"zpl"}
+	}
+	return f.formats
+}
 func (f *fakeSink) Check(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.checkErr
 }
-func (f *fakeSink) Write(_ context.Context, title string, data []byte) error {
+func (f *fakeSink) Write(_ context.Context, job Job) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.writeErr != nil {
 		return f.writeErr
 	}
-	f.jobs = append(f.jobs, append([]byte(nil), data...))
-	f.titles = append(f.titles, title)
+	f.jobs = append(f.jobs, append([]byte(nil), job.Data...))
+	f.titles = append(f.titles, job.Title)
+	f.sent = append(f.sent, job.Format)
 	return nil
 }
 
+func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
 func newTestPrinter(sink Sink) *Printer {
 	cfg := config.DeviceConfig{ID: "labeldrucker", Kind: Kind, Driver: "raw_tcp"}
-	return NewWithSink(cfg, device.NewBus(), slog.New(slog.NewTextHandler(io.Discard, nil)), sink)
+	return NewWithSink(cfg, device.NewBus(), discardLog(), sink)
 }
 
 func printReq(format string, data []byte, title string) json.RawMessage {
@@ -92,7 +103,7 @@ func TestPrintPassesBytesThroughUnchanged(t *testing.T) {
 	if st.State != device.StateOnline || st.Stats.(Stats).Jobs != 1 {
 		t.Fatalf("Status nach Druck: %+v", st)
 	}
-	if job := st.Last.(Job); job.Bytes != len(zpl) || job.Format != "zpl" {
+	if job := st.Last.(LastJob); job.Bytes != len(zpl) || job.Format != "zpl" {
 		t.Fatalf("Last = %+v", job)
 	}
 }
@@ -202,7 +213,7 @@ func TestTCPSinkDeliversTheJob(t *testing.T) {
 		t.Fatalf("Check: %v", err)
 	}
 	zpl := []byte("^XA^FO20,20^FDTest^FS^XZ")
-	if err := sink.Write(ctx, "t", zpl); err != nil {
+	if err := sink.Write(ctx, Job{Title: "t", Format: "zpl", Data: zpl}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	select {
@@ -232,7 +243,7 @@ func TestFileSinkWritesToTheDevice(t *testing.T) {
 	if err := sink.Check(context.Background()); err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if err := sink.Write(context.Background(), "t", []byte("^XA^XZ")); err != nil {
+	if err := sink.Write(context.Background(), Job{Title: "t", Format: "zpl", Data: []byte("^XA^XZ")}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if got := readAll(t, path); got != "^XA^XZ" {

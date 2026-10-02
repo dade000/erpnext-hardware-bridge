@@ -19,6 +19,7 @@ import (
 	"erpnext-hardware-bridge/internal/config"
 	"erpnext-hardware-bridge/internal/device"
 	"erpnext-hardware-bridge/internal/netutil"
+	"erpnext-hardware-bridge/internal/printer"
 	"erpnext-hardware-bridge/internal/version"
 )
 
@@ -26,7 +27,7 @@ const (
 	helloTimeout = 3 * time.Second
 	pingInterval = 20 * time.Second
 	// Ein Druckauftrag kommt als Base64 in einer Nachricht.
-	readLimit = 8 << 20
+	readLimit = 24 << 20
 	outBuffer = 256
 )
 
@@ -146,6 +147,7 @@ type helloParams struct {
 
 type deviceParams struct {
 	Device string `json:"device"`
+	Format string `json:"format"` // nur printer.print
 }
 
 // --- Session ---
@@ -264,6 +266,14 @@ func (ss *session) dispatch(ctx context.Context, method string, raw json.RawMess
 	}
 	var p deviceParams
 	_ = json.Unmarshal(raw, &p)
+	if kind == "printer" && cmd == "print" && p.Device == "" {
+		// Ohne Geräteangabe: der Standarddrucker des Arbeitsplatzes für
+		// dieses Format. Das Desk muss die Drucker-ID nicht kennen.
+		format := printer.NormalizeFormat(p.Format)
+		if p.Device = printer.Pick(ss.srv.mgr.Statuses(), format); p.Device == "" {
+			return nil, device.Errf("device_missing", "An dieser Station ist kein Drucker für "+strings.ToUpper(format)+" eingerichtet.")
+		}
+	}
 	dev, derr := ss.srv.mgr.Lookup(kind, p.Device)
 	if derr != nil {
 		return nil, derr

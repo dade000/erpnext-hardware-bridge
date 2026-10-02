@@ -288,7 +288,7 @@ Methoden und Events:
 | `scale.tare` | req | Sendet `ST` |
 | `camera.capture` | req | `{preview: false}` → JSON-Antwort mit `{bytes, mime, seq}` gefolgt von **einem Binärframe** mit dem JPEG |
 | `camera.reset` | req | Session schließen und neu öffnen |
-| `printer.print` | req | `{device?, format: "zpl", data: "<base64>", title?}` → `{device, bytes, title}`; die Daten gehen unverändert an den Drucker (Abschnitt 16) |
+| `printer.print` | req | `{device?, format: "zpl"\|"pdf", data: "<base64>", title?}` → `{device, bytes, title, format}`; die Daten gehen unverändert an den Drucker (Abschnitte 16, 17). Ohne `device`: Standarddrucker des Arbeitsplatzes für das Format |
 | `printer.test` | req | Druckt ein eigenes Testetikett |
 | `scan.event` | event | `{code: "…", device: "scanner1", ts: "…"}` |
 | `tunnel.open` | req | `{target: "ws://192.168.1.50:80", subprotocols: ["SIXml"]}` → `{port: 41235}`; die Bridge öffnet einen lokalen Listener auf einem freien Port, gebunden an diese WS-Verbindung |
@@ -525,9 +525,8 @@ alles, was es heute gibt.
   Kamera-Regel (kein `gvfs-gphoto2`, das die Kamera blockiert).
 * **Logs**: `slog` nach stdout (journald) und in eine rotierende Datei neben
   der Config; Log-Level per Config.
-* **Updates**: Phase 1 manuell (neues Binary, Dienst neu starten). Ein
-  Selbst-Update mit signiertem Release-Manifest ist als Phase 5 vorgesehen,
-  nicht im Umfang.
+* **Updates**: über die Oberfläche, »Version & Update« (Abschnitt 18):
+  prüfen, signiertes Release laden, einspielen, zurück.
 * **ERPNext-Kompatibilität**: Die Bridge meldet ihre Protokollversion im
   `hello`; der Client lehnt unbekannte Hauptversionen mit klarer Meldung ab.
 
@@ -571,7 +570,7 @@ alles, was es heute gibt.
 | 2 | Kamera (cgo, Build-Tag), `camera.capture`, HTTP-Kompat `/shot`, Photo Station über Bridge + `save_browser_captured_photo` | Kamera-Pfad komplett in Go |
 | 3 | Serieller Scanner, gemeinsame Scan-Quelle im Desk; Tunnel für Worldline-Terminal (`tunnel.open` aus der Kasse, ohne Config) mit Erreichbarkeitsstatus, Kasse blendet Kartenzahlung ohne Terminal aus, nginx-Umweg entfernen | POS ohne Proxy, Scanner ohne Fokusprobleme |
 | 4 | Druckmodul: Labels roh (ZPL) auf den Drucker der Station, `printer.print` (Abschnitt 16) | **gebaut 2026-10-01**, Windows-Weg nur kompiliert |
-| 5 | Selbst-Update, Windows-Installer | optional |
+| 5 | Selbst-Update (Abschnitt 18), Windows-Installer | Update **gebaut 2026-10-02**; Neustart durch den Dienstverwalter an keiner echten Installation geprüft. Installer offen |
 
 ## Quellen
 
@@ -664,3 +663,105 @@ liefert die Drucker des Betriebssystems als Vorschlagsliste.
 * `system` unter Windows und unter CUPS an einem echten Drucker prüfen.
 * Mehrere Kopien, Statusrückmeldung des Druckers (Papier leer) und USB ohne
   Betriebssystem-Treiber unter Windows sind nicht enthalten.
+
+## 17. PDF über IPP und Standarddrucker (2026-10-02)
+
+**Anlass.** PDFs sollen ohne Druckdialog gedruckt werden können: PDF-Labels
+an Plätzen ohne Etikettendrucker, Zolldokumente, und Belege aus jedem
+ERPNext-Formular über einen Schnelldruck-Knopf.
+
+**Treiber `ipp`.** Spricht IPP 2.0 über http(s) (`ipp://` → Port 631,
+`ipps://` mit TLS), ohne Fremdbibliothek (`internal/printer/ipp.go`).
+`Get-Printer-Attributes` liefert Zustand und `document-format-supported`;
+daraus entstehen die Formate des Druckers: `application/pdf` → `pdf`,
+`application/vnd.cups-raw` → `zpl`. `Print-Job` schickt das Dokument
+unverändert mit seinem Format; der Drucker rendert. PDF ist bei IPP
+Everywhere optional – ein Drucker, der nur Rasterformate meldet, bietet kein
+Format an und gilt als nicht nutzbar. Umgewandelt wird nichts.
+
+Ein CUPS-Server meldet für jede Warteschlange PDF und Rohdaten, egal was
+dahinter steht. `accept: pdf|zpl` legt deshalb fest, wofür ein Drucker
+taugt. `media` und `print_scaling` gehen bei PDF als Auftragsattribute mit,
+wenn gesetzt. `insecure_tls` schaltet die Zertifikatsprüfung je Drucker ab
+(Drucker haben meist selbstsignierte Zertifikate). Anmeldung am Drucker
+(HTTP-Auth) ist nicht eingebaut.
+
+**Formate je Drucker.** `Status.formats` steht in `hello`, `devices.list`
+und `device.state`. Die Rohtreiber melden `zpl`.
+
+**Standarddrucker.** `default: true` an einem Drucker macht ihn zum
+Standarddrucker des Arbeitsplatzes. `printer.print` ohne `device` wählt den
+Standarddrucker, der das Format annimmt, sonst den ersten passenden
+(`printer.Pick`). Die Zuordnung liegt wie alles andere in `bridge.yaml`:
+ERPNext kennt keine Arbeitsplätze.
+
+**Grenzen.** Ein Auftrag bis 16 MB, WebSocket-Nachricht bis 24 MB.
+
+**Desk.** `hwbridge.js` kennt `printersFor(format)`, `defaultPrinter(format)`
+und `standby()`: Seiten, die die Bridge nur gelegentlich brauchen, lassen
+den Client nach dem ersten Fehlschlag ruhen, bis `retry()` gerufen wird.
+Der Schnelldruck (`holzschuherzeugung_devich/public/js/quick_print.js`)
+zeigt seinen Knopf nur, wenn ein PDF-Drucker erreichbar ist.
+
+**Stand.** Getestet gegen einen IPP-Drucker als Attrappe (Formate, Auftrag
+bytegleich, Fehler). Die Abfrage (`Get-Printer-Attributes`) lief über IPPS
+gegen einen echten CUPS-Server. Ein echter Druckauftrag über IPP wurde nicht
+abgeschickt.
+
+## 18. Updates (2026-10-02)
+
+**Ablauf.** In der Oberfläche unter »Version & Update«:
+
+1. *Auf Updates prüfen* fragt das neueste GitHub-Release des Repos ab und
+   zeigt Version und Release-Notiz. Dasselbe passiert still eine Minute nach
+   dem Start und danach einmal am Tag (abschaltbar: `no_update_check`).
+   Installiert wird nie von selbst.
+2. *Installieren* lädt das Binary dieser Plattform, die Prüfsummen-Datei und
+   deren Signatur, prüft beides und setzt das neue Binary an die Stelle des
+   laufenden. Das bisherige bleibt als `<name>.old` liegen.
+3. Die Bridge beendet sich; systemd (`Restart=always`) bzw. der
+   Windows-Dienstverwalter (Wiederherstellung »Neu starten«) startet das neue
+   Binary. Ohne Dienst sagt die Oberfläche, dass von Hand neu zu starten ist.
+4. *Vorige Version wiederherstellen* tauscht zurück.
+
+Die Konfiguration wird nicht angefasst.
+
+**Signatur.** Der Release-Workflow unterschreibt `SHA256SUMS-<version>` mit
+einem Ed25519-Schlüssel aus dem GitHub-Secret `RELEASE_SIGNING_KEY`
+(`cmd/relsign`); die Bridge prüft mit dem einkompilierten öffentlichen
+Schlüssel (`internal/update/pubkey.go`). Eine Prüfsumme allein, vom selben
+Ort geladen wie das Binary, erkennt nur Übertragungsfehler – hier ersetzt
+ein Dienst sein eigenes Programm, deshalb zählt die Herkunft. Abgelehnt
+werden: fremder Schlüssel, geänderte Prüfsummen oder Binaries, fehlende
+Signatur, ein altes Release unter neuem Namen (die Dateinamen tragen die
+Version) und alles, was nicht neuer ist als die laufende Version. Ohne
+Secret schlägt der Release-Lauf fehl, es entsteht kein unsigniertes Release.
+
+Ein neues Schlüsselpaar (`relsign keygen`) heißt: Ausgelieferte Bridges
+nehmen keine Updates mehr an, bis sie einmal von Hand auf eine Version mit
+dem neuen öffentlichen Schlüssel gebracht wurden.
+
+**Voraussetzungen.**
+
+* Das Repo ist öffentlich (oder die Releases liegen öffentlich): Die
+  Stationen haben kein GitHub-Token.
+* Der Dienst darf im Programmordner schreiben. Linux: Das Installationsskript
+  legt das Binary nach `/opt/erpnext-hardware-bridge/` (gehört dem
+  Dienstbenutzer `hwbridge`, in der Unit unter `ReadWritePaths`). Windows: Der
+  Dienst läuft als LocalSystem und darf nach `Program Files` schreiben; eine
+  laufende `.exe` lässt sich umbenennen, nur nicht überschreiben. Kann der
+  Dienst nicht schreiben, zeigt die Oberfläche das an und bietet kein
+  Installieren.
+
+**Abwägung.** Ein Dienst, der sein Programm selbst ersetzen darf, gibt einem
+Angreifer, der den Dienst übernimmt, auch dessen Programmordner. Die
+Alternative – ein Helfer mit Root-Rechten, der geprüfte Updates einspielt –
+trennt das sauberer, bringt aber eine zweite Unit und einen zweiten
+Prüfpfad. Entschieden für den einfachen Weg; der Dienst läuft ohnehin
+unprivilegiert und gehärtet.
+
+**Stand.** Getestet: Prüfen, Laden, Signatur, Tausch und Rückweg gegen einen
+nachgestellten Release-Server, auch über die Oberfläche mit einem echt
+signierten Test-Release. Nicht geprüft: der Neustart durch systemd bzw. den
+Windows-Dienstverwalter an einer echten Installation und ein Lauf des
+Release-Workflows mit dem Signier-Schritt.

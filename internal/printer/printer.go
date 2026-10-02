@@ -1,18 +1,19 @@
 // Package printer ist das Druckmodul der Bridge: es reicht Druckdaten
 // unverändert an einen Drucker am Stations-PC weiter.
 //
-// Gedacht für Etikettendrucker, die ihre Druckersprache selbst verstehen
-// (ZPL): Das Desk holt das Label vom ERPNext-Server und übergibt es Byte für
-// Byte. Die Bridge rendert nichts, wandelt nichts um und schreibt nichts im
-// Label um – ein Label kommt so am Drucker an, wie der Carrier es geliefert
-// hat. Formate, die ein Drucker nicht selbst versteht (PDF), lehnt sie ab;
-// die druckt das Desk über den Dialog des Browsers.
+// Das Desk holt das Dokument vom ERPNext-Server und übergibt es Byte für
+// Byte, zusammen mit seinem Format. Die Bridge rendert nichts, wandelt nichts
+// um und schreibt nichts um – ein Label kommt so am Drucker an, wie der
+// Carrier es geliefert hat. Ein Drucker bekommt nur Formate, die er selbst
+// versteht; alles andere lehnt die Bridge ab, statt es umzuwandeln.
 //
-// Drei Wege zum Drucker:
+// Vier Wege zum Drucker:
 //
-//	raw_tcp   Netzwerkdrucker, Port 9100 (JetDirect/RAW)
-//	raw_file  Gerätedatei, z.B. /dev/usb/lp0
-//	system    Druckwarteschlange des Betriebssystems, roh (CUPS bzw. Windows-Spooler)
+//	raw_tcp   Netzwerkdrucker, Port 9100 (JetDirect/RAW)                  zpl
+//	raw_file  Gerätedatei, z.B. /dev/usb/lp0                              zpl
+//	system    Druckwarteschlange des Betriebssystems, roh                 zpl
+//	ipp       IPP/IPPS-Drucker oder CUPS-Server; Formate meldet der       pdf, zpl
+//	          Drucker selbst (PDF nur, wenn er es nativ annimmt)
 package printer
 
 import (
@@ -37,22 +38,37 @@ const (
 	checkTimeout  = 4 * time.Second
 	jobTimeout    = 20 * time.Second
 	// MaxJobBytes begrenzt einen Auftrag. Ein Versandlabel hat einige zehn
-	// Kilobyte, mit eingebetteten Grafiken wenige hundert.
-	MaxJobBytes = 4 << 20
+	// Kilobyte, ein Beleg als PDF mit Bildern wenige Megabyte.
+	MaxJobBytes = 16 << 20
 )
+
+// Job ist ein Druckauftrag.
+type Job struct {
+	Title  string
+	Format string // "zpl" oder "pdf"
+	Data   []byte
+}
 
 // Sink ist ein Weg zum Drucker.
 type Sink interface {
 	// Target beschreibt das Ziel für Statusseite und Logs.
 	Target() string
+	// Formats nennt, was der Drucker annimmt ("zpl", "pdf"). Bei IPP steht
+	// das erst nach dem ersten Check fest.
+	Formats() []string
 	// Check prüft, ob der Drucker erreichbar ist, ohne etwas zu drucken.
 	Check(ctx context.Context) error
 	// Write schickt die Daten unverändert an den Drucker.
-	Write(ctx context.Context, title string, data []byte) error
+	Write(ctx context.Context, job Job) error
 }
 
-// Job beschreibt den letzten Auftrag (Statusseite).
-type Job struct {
+// rawOnly ist die Formatliste der Treiber, die Bytes ungefiltert durchreichen.
+type rawOnly struct{}
+
+func (rawOnly) Formats() []string { return []string{"zpl"} }
+
+// LastJob beschreibt den letzten Auftrag (Statusseite).
+type LastJob struct {
 	TS     time.Time `json:"ts"`
 	Title  string    `json:"title,omitempty"`
 	Format string    `json:"format"`
@@ -81,13 +97,18 @@ type Printer struct {
 
 // NewWithSink baut einen Drucker über einem beliebigen Sink (Tests, Treiber).
 func NewWithSink(cfg config.DeviceConfig, bus *device.Bus, log *slog.Logger, sink Sink) *Printer {
-	return &Printer{
+	p := &Printer{
 		cfg:  cfg,
 		log:  log,
 		st:   device.NewStatusHolder(bus, cfg.ID, Kind, cfg.Driver, sink.Target()),
 		sink: sink,
 		wake: make(chan struct{}, 1),
 	}
+	p.st.Update(func(st *device.Status) {
+		st.Formats = sink.Formats()
+		st.Default = cfg.Default
+	})
+	return p
 }
 
 func (p *Printer) ID() string   { return p.cfg.ID }
@@ -95,6 +116,7 @@ func (p *Printer) Kind() string { return Kind }
 
 func (p *Printer) Status() device.Status {
 	st := p.st.Get()
+	st.Formats = p.sink.Formats() // bei IPP erst nach der ersten Antwort bekannt
 	p.statsMu.Lock()
 	st.Stats = p.stats
 	p.statsMu.Unlock()
@@ -127,6 +149,9 @@ func (p *Printer) check(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
+	// Vor dem Zustandswechsel, damit device.state die Formate schon trägt.
+	formats := p.sink.Formats()
+	p.st.Update(func(st *device.Status) { st.Formats = formats })
 	if err != nil {
 		p.st.Set(device.StateOffline, "Drucker nicht erreichbar: "+err.Error())
 		return
@@ -148,12 +173,13 @@ func (p *Printer) Handle(ctx context.Context, cmd string, raw json.RawMessage) (
 		if err := json.Unmarshal(raw, &in); err != nil {
 			return nil, device.Errf("bad_request", "Druckauftrag nicht verstanden")
 		}
-		format := strings.ToLower(strings.TrimSpace(in.Format))
-		if format != "zpl" && format != "raw" {
-			// Die Bridge gibt Daten roh weiter. Ein PDF käme am
-			// Etikettendrucker als Zeichensalat heraus.
+		format := NormalizeFormat(in.Format)
+		if !Accepts(p.sink.Formats(), format) {
+			// Nichts wird umgewandelt: Ein PDF käme am Etikettendrucker als
+			// Zeichensalat heraus, ZPL an einem Bürodrucker ebenso.
 			return nil, device.Errf("unsupported_format",
-				"Dieser Drucker nimmt nur Rohdaten (ZPL). Format "+in.Format+" bitte über den Druckdialog drucken.")
+				"Drucker "+p.cfg.ID+" nimmt "+strings.ToUpper(in.Format)+" nicht an (er kann: "+
+					strings.ToUpper(strings.Join(p.sink.Formats(), ", "))+").")
 		}
 		data, err := base64.StdEncoding.DecodeString(in.Data)
 		if err != nil {
@@ -161,8 +187,26 @@ func (p *Printer) Handle(ctx context.Context, cmd string, raw json.RawMessage) (
 		}
 		return p.print(ctx, format, in.Title, data)
 	case "test", "read":
-		// "read" ist das Kommando des Testknopfs der Oberfläche.
-		return p.print(ctx, "zpl", "Testdruck", testLabel(p.cfg.ID))
+		// "read" ist das Kommando des Testknopfs der Oberfläche. Die
+		// Testseite kommt in einer Sprache, die der Drucker versteht.
+		formats := p.sink.Formats()
+		if len(formats) == 0 {
+			// IPP vor der ersten Antwort: jetzt fragen.
+			cctx, cancel := context.WithTimeout(ctx, checkTimeout)
+			err := p.sink.Check(cctx)
+			cancel()
+			if formats = p.sink.Formats(); len(formats) == 0 {
+				msg := "Drucker nennt kein Format"
+				if err != nil {
+					msg = err.Error()
+				}
+				return nil, device.Errf("print_failed", "Druck fehlgeschlagen: "+msg)
+			}
+		}
+		if Accepts(formats, "zpl") {
+			return p.print(ctx, "zpl", "Testdruck", testLabel(p.cfg.ID))
+		}
+		return p.print(ctx, "pdf", "Testdruck", testPDF(p.cfg.ID))
 	}
 	return nil, device.Errf("unknown_method", "printer."+cmd+" gibt es nicht")
 }
@@ -181,7 +225,7 @@ func (p *Printer) print(ctx context.Context, format, title string, data []byte) 
 
 	p.jobMu.Lock()
 	jctx, cancel := context.WithTimeout(ctx, jobTimeout)
-	err := p.sink.Write(jctx, title, data)
+	err := p.sink.Write(jctx, Job{Title: title, Format: format, Data: data})
 	cancel()
 	p.jobMu.Unlock()
 
@@ -200,14 +244,14 @@ func (p *Printer) print(ctx context.Context, format, title string, data []byte) 
 		return nil, device.Errf("print_failed", "Druck fehlgeschlagen: "+msg)
 	}
 
-	job := Job{TS: time.Now(), Title: title, Format: format, Bytes: len(data)}
+	job := LastJob{TS: time.Now(), Title: title, Format: format, Bytes: len(data)}
 	p.statsMu.Lock()
 	p.stats.Jobs++
 	p.statsMu.Unlock()
 	p.st.Update(func(st *device.Status) { st.Last = job })
 	p.st.Set(device.StateOnline, "")
 	p.log.Info("Gedruckt", "title", title, "format", format, "bytes", len(data))
-	return map[string]any{"device": p.cfg.ID, "bytes": len(data), "title": title}, nil
+	return map[string]any{"device": p.cfg.ID, "bytes": len(data), "title": title, "format": format}, nil
 }
 
 func (p *Printer) poke() {
@@ -217,14 +261,43 @@ func (p *Printer) poke() {
 	}
 }
 
-// testLabel ist ein kleines eigenes Etikett für den Testknopf. Es ist kein
-// Carrier-Label – die werden nie von der Bridge erzeugt oder verändert.
-func testLabel(id string) []byte {
-	return []byte("^XA^CI28" +
-		"^FO40,40^A0N,48,48^FDERPNext Hardware Bridge^FS" +
-		"^FO40,110^A0N,34,34^FDTestdruck: " + id + "^FS" +
-		"^FO40,160^A0N,28,28^FD" + time.Now().Format("02.01.2006 15:04:05") + "^FS" +
-		"^XZ")
+// NormalizeFormat bringt die Formatangabe eines Auftrags in die Form der
+// Formatlisten. "raw" ist der alte Name für Rohdaten in Druckersprache.
+func NormalizeFormat(f string) string {
+	f = strings.ToLower(strings.TrimSpace(f))
+	if f == "raw" {
+		return "zpl"
+	}
+	return f
+}
+
+// Accepts sagt, ob format in der Formatliste eines Druckers steht.
+func Accepts(formats []string, format string) bool {
+	for _, f := range formats {
+		if f == format {
+			return true
+		}
+	}
+	return false
+}
+
+// Pick wählt den Drucker für einen Auftrag ohne Geräteangabe: den
+// Standarddrucker des Arbeitsplatzes, wenn er das Format annimmt, sonst den
+// ersten, der es annimmt. Leer, wenn es keinen gibt.
+func Pick(statuses []device.Status, format string) string {
+	first := ""
+	for _, st := range statuses {
+		if st.Kind != Kind || !Accepts(st.Formats, format) {
+			continue
+		}
+		if st.Default {
+			return st.ID
+		}
+		if first == "" {
+			first = st.ID
+		}
+	}
+	return first
 }
 
 // Register macht die Druckertreiber dem Manager bekannt.
@@ -237,5 +310,8 @@ func Register(m *device.Manager) {
 	})
 	m.Register(Kind, "system", func(cfg config.DeviceConfig, bus *device.Bus, log *slog.Logger) device.Device {
 		return NewWithSink(cfg, bus, log, newSystemSink(cfg.Queue))
+	})
+	m.Register(Kind, "ipp", func(cfg config.DeviceConfig, bus *device.Bus, log *slog.Logger) device.Device {
+		return NewWithSink(cfg, bus, log, newIPPSink(cfg))
 	})
 }

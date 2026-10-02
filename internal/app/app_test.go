@@ -409,10 +409,110 @@ func TestWebSocketPrintsLabelUnchanged(t *testing.T) {
 	if r := cl.call("printer.print", map[string]string{"format": "zpl", "data": base64.StdEncoding.EncodeToString([]byte("^XA^XZ"))}); !r.OK {
 		t.Fatalf("print ohne device: %+v", r.Error)
 	}
-	if r := cl.call("printer.print", map[string]string{"format": "pdf", "data": "JVBERi0="}); r.OK || r.Error.Code != "unsupported_format" {
+	// Ein PDF an den ZPL-Drucker: abgelehnt, nicht umgewandelt.
+	if r := cl.call("printer.print", map[string]string{"device": "labeldrucker", "format": "pdf", "data": "JVBERi0="}); r.OK || r.Error.Code != "unsupported_format" {
 		t.Fatalf("pdf muss abgelehnt werden: %+v", r)
+	}
+	// Ohne Geräteangabe gibt es an dieser Station keinen Drucker für PDF.
+	if r := cl.call("printer.print", map[string]string{"format": "pdf", "data": "JVBERi0="}); r.OK || r.Error.Code != "device_missing" {
+		t.Fatalf("pdf ohne PDF-Drucker: %+v", r)
 	}
 	if r := cl.call("printer.print", map[string]string{"device": "waage", "format": "zpl", "data": "XlhB"}); r.OK || r.Error.Code != "device_missing" {
 		t.Fatalf("Waage ist kein Drucker: %+v", r)
+	}
+}
+
+// Schnelldruck aus dem Desk: ein PDF ohne Geräteangabe geht an den
+// Standarddrucker des Arbeitsplatzes, unverändert und als application/pdf.
+func TestWebSocketPrintsPDFOnTheDefaultIPPPrinter(t *testing.T) {
+	type job struct {
+		format string
+		doc    []byte
+	}
+	jobs := make(chan job, 4)
+	ipp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		op := int(body[2])<<8 | int(body[3])
+		var out bytes.Buffer
+		out.Write([]byte{2, 0, 0, 0})
+		out.Write(body[4:8])
+		attr := func(group, tag byte, name, value string) {
+			if group != 0 {
+				out.WriteByte(group)
+			}
+			out.WriteByte(tag)
+			out.Write([]byte{byte(len(name) >> 8), byte(len(name))})
+			out.WriteString(name)
+			out.Write([]byte{byte(len(value) >> 8), byte(len(value))})
+			out.WriteString(value)
+		}
+		attr(0x01, 0x47, "attributes-charset", "utf-8")
+		attr(0, 0x48, "attributes-natural-language", "de")
+		if op == 0x000B {
+			attr(0x04, 0x49, "document-format-supported", "application/pdf")
+		} else {
+			// Das Dokument folgt dem Ende-Tag der Attribute; das Format steht davor.
+			marker := []byte("%PDF")
+			i := bytes.Index(body, marker)
+			format := ""
+			if bytes.Contains(body[:i], []byte("application/pdf")) {
+				format = "application/pdf"
+			}
+			jobs <- job{format: format, doc: append([]byte(nil), body[i:]...)}
+		}
+		out.WriteByte(0x03)
+		w.Header().Set("Content-Type", "application/ipp")
+		_, _ = w.Write(out.Bytes())
+	}))
+	defer ipp.Close()
+
+	e := setup(t)
+	cfg := e.app.Config().Clone()
+	cfg.Devices = append(cfg.Devices,
+		config.DeviceConfig{ID: "flur", Kind: "printer", Driver: "ipp", URI: "ipp://127.0.0.1:1/ipp/print"},
+		config.DeviceConfig{ID: "buero", Kind: "printer", Driver: "ipp", Default: true,
+			URI: "ipp://" + strings.TrimPrefix(ipp.URL, "http://") + "/ipp/print"},
+	)
+	cfg.ApplyDefaults()
+	if _, err := e.app.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	cl, _, err := dial(t, "localhost", e.port, origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl.hello()
+	// Der Drucker meldet seine Formate erst nach der ersten Abfrage.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		r := cl.call("devices.list", nil)
+		if strings.Contains(string(r.Result), `"pdf"`) && strings.Contains(string(r.Result), `"default": true`) ||
+			strings.Contains(string(r.Result), `"default":true`) && strings.Contains(string(r.Result), `"pdf"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Drucker meldet kein PDF: %s", r.Result)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	pdf := append([]byte("%PDF-1.4\n"), bytes.Repeat([]byte("Beleg \x00\xff\n"), 20000)...)
+	r := cl.call("printer.print", map[string]string{"format": "pdf", "title": "SAL-ORD-2026-01224",
+		"data": base64.StdEncoding.EncodeToString(pdf)})
+	if !r.OK || !strings.Contains(string(r.Result), `"buero"`) {
+		t.Fatalf("print: %+v %s", r.Error, r.Result)
+	}
+	select {
+	case got := <-jobs:
+		if got.format != "application/pdf" || !bytes.Equal(got.doc, pdf) {
+			t.Fatalf("am Drucker: Format %q, %d Bytes (geschickt %d)", got.format, len(got.doc), len(pdf))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("am Drucker kam nichts an")
+	}
+	// ZPL nimmt an dieser Station kein Drucker an.
+	if r := cl.call("printer.print", map[string]string{"format": "zpl", "data": "XlhB"}); r.OK || r.Error.Code != "device_missing" {
+		t.Fatalf("zpl ohne ZPL-Drucker: %+v", r)
 	}
 }

@@ -63,6 +63,19 @@ func (p *program) Start(service.Service) error {
 	}
 	log.Info("ERPNext Hardware Bridge startet", "version", version.Version, "config", p.cfgPath, "exists", exists)
 	p.app = app.New(p.cfgPath, cfg, exists, log, level, ring)
+	if !service.Interactive() {
+		// Nach einem Update: sauber herunterfahren und mit Fehlercode enden.
+		// systemd (Restart=always) und der Windows-Dienstverwalter
+		// (Wiederherstellung »Neu starten«) starten dann das neue Binary.
+		// Kurz warten, damit die Antwort an die Oberfläche noch hinausgeht.
+		p.app.SetRestart(func() {
+			go func() {
+				time.Sleep(700 * time.Millisecond)
+				_ = p.Stop(nil)
+				os.Exit(1)
+			}()
+		})
+	}
 	return p.app.Start()
 }
 

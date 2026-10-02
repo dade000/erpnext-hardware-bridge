@@ -77,6 +77,7 @@ func TestValidatePrinters(t *testing.T) {
 		{ID: "netz", Kind: "printer", Driver: "raw_tcp", Address: "192.168.1.60:9100"},
 		{ID: "usb", Kind: "printer", Driver: "raw_file", Port: PortSpec{Path: "/dev/usb/lp0"}},
 		{ID: "os", Kind: "printer", Driver: "system", Queue: "Zebra_ZD421"},
+		{ID: "buero", Kind: "printer", Driver: "ipp", URI: "ipps://drucker.lan/ipp/print", PrintScaling: "fit", Default: true},
 	}}
 	if err := good.Validate(); err != nil {
 		t.Fatalf("gültige Drucker abgelehnt: %v", err)
@@ -86,12 +87,14 @@ func TestValidatePrinters(t *testing.T) {
 		{ID: "b", Kind: "printer", Driver: "raw_tcp", Address: "host:99999"},
 		{ID: "c", Kind: "printer", Driver: "raw_file"},
 		{ID: "d", Kind: "printer", Driver: "system", Queue: "  "},
+		{ID: "e", Kind: "printer", Driver: "ipp", URI: "https://drucker.lan/ipp/print"},
+		{ID: "f", Kind: "printer", Driver: "ipp", URI: "ipp://drucker.lan/ipp/print", PrintScaling: "klein"},
 	}}
 	err := bad.Validate()
 	if err == nil {
 		t.Fatal("erwartet Fehler")
 	}
-	for _, want := range []string{"nicht host:port", "keinen gültigen Port", "port.path fehlt", "queue fehlt"} {
+	for _, want := range []string{"nicht host:port", "keinen gültigen Port", "port.path fehlt", "queue fehlt", "keine ipp://", "print_scaling"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Fehler %q fehlt in:\n%v", want, err)
 		}

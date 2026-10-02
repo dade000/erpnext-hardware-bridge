@@ -20,6 +20,7 @@ import (
 	"erpnext-hardware-bridge/internal/netutil"
 	"erpnext-hardware-bridge/internal/printer"
 	"erpnext-hardware-bridge/internal/serialport"
+	"erpnext-hardware-bridge/internal/update"
 	"erpnext-hardware-bridge/internal/ws"
 )
 
@@ -42,6 +43,9 @@ type Runtime interface {
 	WS() *ws.Server
 	Logs() []string
 	Status() map[string]any
+	Updater() *update.Updater
+	// Restart startet den Dienst neu; false, wenn die Bridge nicht als Dienst läuft.
+	Restart() bool
 }
 
 // NewLoopback baut den Handler für 127.0.0.1/::1. port ist der gebundene
@@ -86,6 +90,37 @@ func NewLoopback(rt Runtime, port int, log *slog.Logger) http.Handler {
 			return
 		}
 		writeJSON(w, 200, ports)
+	})
+
+	// --- Updates: prüfen, einspielen, zurück. Eingespielt wird nur hier, auf
+	// Knopfdruck in der Oberfläche; schreibende Aufrufe gehen durch guard().
+	mux.HandleFunc("POST /api/update/check", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		info, _ := rt.Updater().Check(ctx) // der Fehler steht in info.Error
+		writeJSON(w, 200, info)
+	})
+
+	mux.HandleFunc("POST /api/update/install", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+		defer cancel()
+		tag, err := rt.Updater().Install(ctx)
+		if err != nil {
+			log.Error("Update fehlgeschlagen", "err", err)
+			writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		log.Info("Update eingespielt", "version", tag)
+		writeJSON(w, 200, map[string]any{"ok": true, "version": tag, "restarting": rt.Restart()})
+	})
+
+	mux.HandleFunc("POST /api/update/rollback", func(w http.ResponseWriter, r *http.Request) {
+		if err := rt.Updater().Rollback(); err != nil {
+			writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		log.Info("Vorige Version wiederhergestellt")
+		writeJSON(w, 200, map[string]any{"ok": true, "restarting": rt.Restart()})
 	})
 
 	// Druckwarteschlangen des Betriebssystems, als Vorschlagsliste für den

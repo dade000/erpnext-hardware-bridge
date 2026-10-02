@@ -23,13 +23,16 @@ const DefaultListenPort = 8735
 
 // Config ist der Inhalt von bridge.yaml.
 type Config struct {
-	Station        string         `yaml:"station" json:"station"`
-	ListenPort     int            `yaml:"listen_port" json:"listen_port"`
-	AllowedOrigins []string       `yaml:"allowed_origins" json:"allowed_origins"`
-	Token          string         `yaml:"token,omitempty" json:"token,omitempty"`
-	LogLevel       string         `yaml:"log_level,omitempty" json:"log_level,omitempty"`
-	Devices        []DeviceConfig `yaml:"devices" json:"devices"`
-	HTTPCompat     HTTPCompat     `yaml:"http_compat" json:"http_compat"`
+	Station        string   `yaml:"station" json:"station"`
+	ListenPort     int      `yaml:"listen_port" json:"listen_port"`
+	AllowedOrigins []string `yaml:"allowed_origins" json:"allowed_origins"`
+	Token          string   `yaml:"token,omitempty" json:"token,omitempty"`
+	LogLevel       string   `yaml:"log_level,omitempty" json:"log_level,omitempty"`
+	// NoUpdateCheck schaltet die tägliche Frage nach einem neuen Release ab.
+	// Der Knopf »Auf Updates prüfen« geht weiterhin.
+	NoUpdateCheck bool           `yaml:"no_update_check,omitempty" json:"no_update_check,omitempty"`
+	Devices       []DeviceConfig `yaml:"devices" json:"devices"`
+	HTTPCompat    HTTPCompat     `yaml:"http_compat" json:"http_compat"`
 }
 
 // DeviceConfig beschreibt ein angeschlossenes Gerät.
@@ -48,9 +51,25 @@ type DeviceConfig struct {
 	StableToleranceKG float64 `yaml:"stable_tolerance_kg,omitempty" json:"stable_tolerance_kg,omitempty"`
 
 	// Drucker: Address für raw_tcp (host:port, üblich 9100), Port.Path für
-	// raw_file, Queue für system (Druckwarteschlange des Betriebssystems).
+	// raw_file, Queue für system (Druckwarteschlange des Betriebssystems),
+	// URI für ipp (ipp://, ipps://).
 	Address string `yaml:"address,omitempty" json:"address,omitempty"`
 	Queue   string `yaml:"queue,omitempty" json:"queue,omitempty"`
+	URI     string `yaml:"uri,omitempty" json:"uri,omitempty"`
+	// InsecureTLS: Zertifikat des Druckers nicht prüfen (ipps mit
+	// selbstsigniertem Zertifikat, wie bei Druckern üblich).
+	InsecureTLS bool `yaml:"insecure_tls,omitempty" json:"insecure_tls,omitempty"`
+	// Media und PrintScaling gehen als IPP-Auftragsattribute mit, wenn
+	// gesetzt (z.B. iso_a6_105x148mm, fit). Leer = Vorgabe des Druckers.
+	Media        string `yaml:"media,omitempty" json:"media,omitempty"`
+	PrintScaling string `yaml:"print_scaling,omitempty" json:"print_scaling,omitempty"`
+	// Accept beschränkt einen ipp-Drucker auf ein Format ("pdf" oder "zpl").
+	// Ein CUPS-Server meldet für jede Warteschlange beides, auch wenn dahinter
+	// ein Bürodrucker steht, der mit Rohdaten nichts anfangen kann.
+	Accept string `yaml:"accept,omitempty" json:"accept,omitempty"`
+	// Default: Standarddrucker dieses Arbeitsplatzes für Aufträge ohne
+	// Geräteangabe (Schnelldruck im Desk).
+	Default bool `yaml:"default,omitempty" json:"default,omitempty"`
 }
 
 // PortSpec wählt einen seriellen Port entweder über den Pfad oder über
@@ -230,6 +249,19 @@ func (c *Config) Validate() error {
 			case "system":
 				if strings.TrimSpace(d.Queue) == "" {
 					errs = append(errs, fmt.Errorf("%s: queue fehlt (Name des Druckers im Betriebssystem)", where))
+				}
+			case "ipp":
+				u, err := url.Parse(d.URI)
+				if err != nil || u.Host == "" || (u.Scheme != "ipp" && u.Scheme != "ipps") {
+					errs = append(errs, fmt.Errorf("%s: uri %q ist keine ipp://- oder ipps://-Adresse", where, d.URI))
+				}
+				if d.Accept != "" && d.Accept != "pdf" && d.Accept != "zpl" {
+					errs = append(errs, fmt.Errorf("%s: accept %q unbekannt (pdf, zpl oder leer)", where, d.Accept))
+				}
+				switch d.PrintScaling {
+				case "", "auto", "auto-fit", "fill", "fit", "none":
+				default:
+					errs = append(errs, fmt.Errorf("%s: print_scaling %q unbekannt (auto, auto-fit, fill, fit, none)", where, d.PrintScaling))
 				}
 			}
 		}

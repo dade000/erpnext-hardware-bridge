@@ -10,7 +10,7 @@ User=hwbridge
 Group=hwbridge
 # dialout: serielle Ports; plugdev: USB-Kamera (Phase 2)
 SupplementaryGroups=dialout plugdev
-ExecStart=/usr/local/bin/erpnext-hardware-bridge -config /etc/erpnext-hardware-bridge/bridge.yaml -log-file -
+ExecStart=/opt/erpnext-hardware-bridge/erpnext-hardware-bridge -config /etc/erpnext-hardware-bridge/bridge.yaml -log-file -
 Restart=always
 RestartSec=2
 
@@ -18,8 +18,10 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-# Die Oberfläche schreibt bridge.yaml (+ .bak) in dieses Verzeichnis.
-ReadWritePaths=/etc/erpnext-hardware-bridge
+# Die Oberfläche schreibt bridge.yaml (+ .bak) in das Konfigurationsverzeichnis.
+# Der Programmordner ist beschreibbar, damit die Bridge ein (signiertes)
+# Update selbst einspielen kann.
+ReadWritePaths=/etc/erpnext-hardware-bridge /opt/erpnext-hardware-bridge
 
 [Install]
 WantedBy=multi-user.target
