@@ -35,7 +35,7 @@ type Config struct {
 // DeviceConfig beschreibt ein angeschlossenes Gerät.
 type DeviceConfig struct {
 	ID     string   `yaml:"id" json:"id"`
-	Kind   string   `yaml:"kind" json:"kind"`     // scale, camera, scanner
+	Kind   string   `yaml:"kind" json:"kind"`     // scale, camera, scanner, printer
 	Driver string   `yaml:"driver" json:"driver"` // pce_pb, …
 	Port   PortSpec `yaml:"port" json:"port"`
 
@@ -46,6 +46,11 @@ type DeviceConfig struct {
 	PollMS            int     `yaml:"poll_ms,omitempty" json:"poll_ms,omitempty"`
 	StableSamples     int     `yaml:"stable_samples,omitempty" json:"stable_samples,omitempty"`
 	StableToleranceKG float64 `yaml:"stable_tolerance_kg,omitempty" json:"stable_tolerance_kg,omitempty"`
+
+	// Drucker: Address für raw_tcp (host:port, üblich 9100), Port.Path für
+	// raw_file, Queue für system (Druckwarteschlange des Betriebssystems).
+	Address string `yaml:"address,omitempty" json:"address,omitempty"`
+	Queue   string `yaml:"queue,omitempty" json:"queue,omitempty"`
 }
 
 // PortSpec wählt einen seriellen Port entweder über den Pfad oder über
@@ -109,7 +114,7 @@ type BasicAuth struct {
 // Bekannte Treiber je Geräteklasse. Nicht enthaltene Treiber werden trotzdem
 // akzeptiert, damit eine Config aus einem neueren Build nicht beim Laden
 // scheitert; das Gerät meldet dann »Treiber nicht enthalten«.
-var knownKinds = map[string]bool{"scale": true, "camera": true, "scanner": true}
+var knownKinds = map[string]bool{"scale": true, "camera": true, "scanner": true, "printer": true}
 
 // Default liefert eine lauffähige Startkonfiguration ohne Geräte.
 func Default() *Config {
@@ -191,7 +196,7 @@ func (c *Config) Validate() error {
 		}
 		seen[d.ID] = true
 		if !knownKinds[d.Kind] {
-			errs = append(errs, fmt.Errorf("%s: kind %q unbekannt (scale, camera, scanner)", where, d.Kind))
+			errs = append(errs, fmt.Errorf("%s: kind %q unbekannt (scale, camera, scanner, printer)", where, d.Kind))
 		}
 		if d.Driver == "" {
 			errs = append(errs, fmt.Errorf("%s: driver fehlt", where))
@@ -208,6 +213,24 @@ func (c *Config) Validate() error {
 			}
 			if d.Baud < 50 || d.Baud > 4_000_000 {
 				errs = append(errs, fmt.Errorf("%s: baud %d ungültig", where, d.Baud))
+			}
+		}
+		if d.Kind == "printer" {
+			switch d.Driver {
+			case "raw_tcp":
+				if host, port, err := net.SplitHostPort(d.Address); err != nil || host == "" {
+					errs = append(errs, fmt.Errorf("%s: address %q ist nicht host:port (z.B. 192.168.1.60:9100)", where, d.Address))
+				} else if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+					errs = append(errs, fmt.Errorf("%s: address %q hat keinen gültigen Port", where, d.Address))
+				}
+			case "raw_file":
+				if d.Port.Path == "" {
+					errs = append(errs, fmt.Errorf("%s: port.path fehlt (z.B. /dev/usb/lp0)", where))
+				}
+			case "system":
+				if strings.TrimSpace(d.Queue) == "" {
+					errs = append(errs, fmt.Errorf("%s: queue fehlt (Name des Druckers im Betriebssystem)", where))
+				}
 			}
 		}
 		if d.Kind == "scale" {

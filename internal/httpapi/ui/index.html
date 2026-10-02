@@ -104,6 +104,7 @@ pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-hei
       <div id="c-devices"></div>
       <div class="row">
         <button class="btn" id="add-scale">+ Waage</button>
+        <button class="btn" id="add-printer">+ Drucker</button>
         <button class="btn" id="rescan">Ports neu suchen</button>
         <span class="muted small" id="ports-info"></span>
       </div>
@@ -171,10 +172,19 @@ function fmtLast(d) {
     const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
     return `<span class="weight">${l.kg.toFixed(3)} kg</span> ${l.stable ? "stabil" : '<span class="muted">bewegt</span>'}<div class="muted small">roh „${esc(l.raw)}“, vor ${age}s</div>`;
   }
+  if (d.kind === "printer" && l.ts) {
+    const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
+    return `letzter Druck vor ${age}s<div class="muted small">${esc(l.title || "")} · ${esc(l.format)} · ${l.bytes} Bytes</div>`;
+  }
   return esc(JSON.stringify(l));
 }
 function fmtStats(s) {
   if (!s) return "";
+  if (typeof s.jobs === "number") {
+    const parts = [`${s.jobs} Aufträge`];
+    if (s.failures) parts.push(`${s.failures} fehlgeschlagen${s.last_error ? " („" + esc(s.last_error) + "“)" : ""}`);
+    return `<div class="muted small">${parts.join(" · ")}</div>`;
+  }
   const parts = [`${s.reads} Messungen`];
   if (s.timeouts) parts.push(`${s.timeouts} Timeouts`);
   if (s.bad_lines) parts.push(`${s.bad_lines} unlesbar${s.last_bad ? " („" + esc(s.last_bad) + "“)" : ""}`);
@@ -214,7 +224,32 @@ async function refreshLog() {
 }
 
 // ---------- Konfiguration ----------
-let cfg = null, cfgLoaded = false, ports = [], drivers = {};
+let cfg = null, cfgLoaded = false, ports = [], drivers = {}, queues = [];
+
+// Druckwarteschlangen des Betriebssystems, als Vorschläge für den Treiber "system".
+async function loadQueues() {
+  const r = await api("GET", "/api/printers");
+  queues = r.ok ? r.data : [];
+}
+
+const PRINTER_DRIVERS = {
+  raw_tcp: "Netzwerkdrucker (Port 9100)",
+  raw_file: "Gerätedatei (z.B. /dev/usb/lp0)",
+  system: "Drucker des Betriebssystems (roh)",
+};
+
+function printerFields(d, i) {
+  switch (d.driver) {
+    case "raw_tcp":
+      return `<label>Adresse<input data-f="address" value="${esc(d.address)}" placeholder="192.168.1.60:9100"></label>`;
+    case "raw_file":
+      return `<label>Gerätedatei<input data-f="path" value="${esc(d.port && d.port.path)}" placeholder="/dev/usb/lp0"></label>`;
+    case "system":
+      return `<label>Druckername<input data-f="queue" list="dq-${i}" value="${esc(d.queue)}" placeholder="Name im Betriebssystem">
+          <datalist id="dq-${i}">${queues.map((q) => `<option value="${esc(q)}">`).join("")}</datalist></label>`;
+  }
+  return "";
+}
 
 async function loadPorts() {
   const r = await api("GET", "/api/ports");
@@ -223,7 +258,7 @@ async function loadPorts() {
 }
 
 async function loadConfig() {
-  const [r] = await Promise.all([api("GET", "/api/config"), loadPorts()]);
+  const [r] = await Promise.all([api("GET", "/api/config"), loadPorts(), loadQueues()]);
   cfg = r.data.config;
   drivers = r.data.drivers || {};
   cfg.devices = cfg.devices || [];
@@ -275,13 +310,13 @@ function renderDevices() {
     return `<div class="device" data-i="${i}">
       <div class="device-head"><b>${esc(d.id || "neues Gerät")}</b>
         <div class="row">
-          <button class="btn" data-act="test">Testen</button>
+          <button class="btn" data-act="test">${d.kind === "printer" ? "Testetikett drucken" : "Testen"}</button>
           <button class="btn danger" data-act="remove">Entfernen</button>
         </div>
       </div>
       <div class="grid">
         <label>ID<input data-f="id" value="${esc(d.id)}"></label>
-        <label>Treiber<select data-f="driver">${kindDrivers.map((x) => `<option ${x === d.driver ? "selected" : ""}>${esc(x)}</option>`).join("")}
+        <label>${d.kind === "printer" ? "Anschluss" : "Treiber"}<select data-f="driver">${kindDrivers.map((x) => `<option value="${esc(x)}" ${x === d.driver ? "selected" : ""}>${esc(d.kind === "printer" && PRINTER_DRIVERS[x] || x)}</option>`).join("")}
           ${kindDrivers.includes(d.driver) ? "" : `<option selected>${esc(d.driver)}</option>`}</select></label>
         ${d.kind === "scale" ? `        <label>Port-Auswahl<select data-f="portmode">
           <option value="path" ${mode === "path" ? "selected" : ""}>Pfad (/dev/…, COM…)</option>
@@ -294,7 +329,8 @@ function renderDevices() {
         <label>Baud<select data-f="baud">${[1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200].map((b) => `<option ${b === d.baud ? "selected" : ""}>${b}</option>`).join("")}</select></label>
         <label>Abfrage alle (ms)<input data-f="poll_ms" type="number" min="50" max="10000" value="${d.poll_ms || 250}"></label>
         <label>Stabil nach n gleichen Werten<input data-f="stable_samples" type="number" min="1" max="50" value="${d.stable_samples || 4}"></label>
-        <label>Toleranz (kg)<input data-f="stable_tolerance_kg" type="number" step="0.001" min="0" value="${d.stable_tolerance_kg ?? 0.005}"></label>` : `<p class="muted small" style="grid-column:1/-1">Geräteklasse ${esc(d.kind)}: Einstellungen folgen mit dem Treiber (Kamera Phase 2, Scanner Phase 3). Bis dahin nur ID und Treiber.</p>`}
+        <label>Toleranz (kg)<input data-f="stable_tolerance_kg" type="number" step="0.001" min="0" value="${d.stable_tolerance_kg ?? 0.005}"></label>` : d.kind === "printer" ? `${printerFields(d, i)}
+        <p class="muted small" style="grid-column:1/-1">Der Drucker bekommt die Daten roh, also in seiner eigenen Sprache (ZPL). Die Bridge verändert ein Label nicht. Für „Drucker des Betriebssystems“ muss der Drucker dort eingerichtet sein; gedruckt wird am Treiber vorbei.</p>` : `<p class="muted small" style="grid-column:1/-1">Geräteklasse ${esc(d.kind)}: Einstellungen folgen mit dem Treiber (Kamera Phase 2, Scanner Phase 3). Bis dahin nur ID und Treiber.</p>`}
       </div>
       <div class="small" data-out="test"></div>
     </div>`;
@@ -312,7 +348,13 @@ function onDeviceEdit(ev) {
   d.port = d.port || {};
   switch (f) {
     case "id": d.id = v.trim(); card.querySelector(".device-head b").textContent = d.id || "neues Gerät"; renderScaleSelect($("h-scale").value); return;
-    case "driver": d.driver = v; return;
+    case "driver":
+      d.driver = v;
+      // Beim Drucker hängen die Felder am Anschluss.
+      if (d.kind === "printer" && ev.type === "change") renderDevices();
+      return;
+    case "address": d.address = v.trim(); return;
+    case "queue": d.queue = v.trim(); return;
     case "path": d.port = { path: v.trim() }; return;
     case "portmode":
       d.port = v === "match" ? { match: d.port.match || { vid: "", pid: "" } } : { path: d.port.path || "" };
@@ -338,11 +380,13 @@ $("c-devices").addEventListener("click", async (ev) => {
     return;
   }
   const out = card.querySelector('[data-out="test"]');
-  out.innerHTML = '<span class="muted">Messe…</span>';
+  out.innerHTML = `<span class="muted">${d.kind === "printer" ? "Drucke…" : "Messe…"}</span>`;
   const r = await api("POST", `/api/devices/${encodeURIComponent(d.id)}/test`);
   if (r.data.ok) {
     const x = r.data.result;
-    out.innerHTML = `<div class="notice n-ok">Antwort: <b>${x.kg.toFixed(3)} kg</b> (roh „${esc(x.raw)}“)</div>`;
+    out.innerHTML = d.kind === "printer"
+      ? `<div class="notice n-ok">Testetikett gesendet (${x.bytes} Bytes). Kommt nichts aus dem Drucker, stimmt der Anschluss oder die Druckersprache nicht.</div>`
+      : `<div class="notice n-ok">Antwort: <b>${x.kg.toFixed(3)} kg</b> (roh „${esc(x.raw)}“)</div>`;
   } else {
     const e = r.data.error || {};
     out.innerHTML = `<div class="notice n-err">${esc(e.message || "Fehler")} <span class="muted">[${esc(e.code)}]</span>. Test läuft gegen die gespeicherte Konfiguration.</div>`;
@@ -355,7 +399,13 @@ $("add-scale").addEventListener("click", () => {
     port: { path: "" }, baud: 9600, poll_ms: 250, stable_samples: 4, stable_tolerance_kg: 0.005 });
   renderDevices(); renderScaleSelect($("h-scale").value);
 });
-$("rescan").addEventListener("click", async () => { await loadPorts(); renderDevices(); });
+$("add-printer").addEventListener("click", () => {
+  const n = cfg.devices.filter((d) => d.kind === "printer").length;
+  cfg.devices.push({ id: n ? `labeldrucker${n + 1}` : "labeldrucker", kind: "printer",
+    driver: (drivers.printer || ["raw_tcp"])[0], address: "", queue: "", port: {} });
+  renderDevices();
+});
+$("rescan").addEventListener("click", async () => { await Promise.all([loadPorts(), loadQueues()]); renderDevices(); });
 $("reload").addEventListener("click", () => { $("cfg-notices").innerHTML = ""; loadConfig(); });
 for (const id of ["h-enabled", "h-listen", "h-user"]) $(id).addEventListener("input", compatWarning);
 

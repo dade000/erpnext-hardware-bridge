@@ -19,6 +19,7 @@ Konzept und Entscheidungen: [docs/KONZEPT.md](docs/KONZEPT.md).
 | 1 | Waage PCE-PB (Live-Gewicht, Lesen, Tara), `/weight` im Flask-Format, Browser-Client | fertig |
 | 2 | Kamera (libgphoto2, nur Linux) | offen – bis dahin reicht die Bridge `/shot` und `/health` an die Flask-App weiter |
 | 3 | Serieller Scanner, Terminal-Tunnel | offen |
+| 4 | Druckmodul: Labels roh (ZPL) auf den Drucker der Station | gebaut; Netzwerkdrucker und Gerätedatei getestet, Betriebssystem-Warteschlange (CUPS, Windows-Spooler) nur kompiliert |
 
 ## Schnellstart
 
@@ -74,6 +75,12 @@ devices:
     poll_ms: 250                  # Takt, solange jemand zusieht; sonst alle 5 s
     stable_samples: 4             # so viele Werte innerhalb der Toleranz = stabil
     stable_tolerance_kg: 0.005
+  - id: labeldrucker
+    kind: printer
+    driver: raw_tcp               # Netzwerkdrucker; oder raw_file / system
+    address: 192.168.1.60:9100
+    # port: /dev/usb/lp0          # raw_file: Gerätedatei
+    # queue: Zebra_ZD421          # system: Drucker des Betriebssystems, roh
 http_compat:
   enabled: true
   listen: ":5000"                 # IPv4 und IPv6
@@ -110,9 +117,30 @@ an den Parcel-Station-PC hängen und dort die Bridge installieren.
 ```
 
 Methoden: `hello`, `devices.list`, `bridge.info`, `scale.subscribe`,
-`scale.unsubscribe`, `scale.read`, `scale.tare`. Fehlercodes:
-`device_missing`, `scale_offline`, `timeout`, `bad_response`, `busy`,
-`unauthorized`, `protocol_mismatch`, `unknown_method`, `unexpected`.
+`scale.unsubscribe`, `scale.read`, `scale.tare`, `printer.print`,
+`printer.test`. Fehlercodes: `device_missing`, `scale_offline`, `timeout`,
+`bad_response`, `busy`, `unauthorized`, `protocol_mismatch`,
+`unknown_method`, `unsupported_format`, `print_failed`, `too_large`,
+`bad_request`, `unexpected`.
+
+### Drucken
+
+```
+→ {"id":3,"type":"req","method":"printer.print","params":{"device":"labeldrucker","format":"zpl","title":"SHIPMENT-00150","data":"<base64>"}}
+← {"id":3,"type":"res","ok":true,"result":{"device":"labeldrucker","bytes":22759,"title":"SHIPMENT-00150"}}
+```
+
+Die Bridge reicht die Daten unverändert an den Drucker weiter; sie rendert
+nichts und wandelt nichts um. Der Drucker muss die Sprache selbst verstehen
+(ZPL). Anderes als `zpl`/`raw` lehnt sie mit `unsupported_format` ab – ein
+PDF druckt das Desk über den Dialog des Browsers. Ohne `device` nimmt sie
+den ersten Drucker der Station. Hintergrund in
+[docs/KONZEPT.md](docs/KONZEPT.md), Abschnitt 16.
+
+Hinweis zu Chrome: Der Zugriff einer https-Seite auf `localhost` braucht die
+Freigabe »Geräte im lokalen Netzwerk« (einmalige Abfrage des Browsers oder
+Richtlinie `LocalNetworkAccessAllowedForUrls`). Ohne sie meldet das Desk
+»keine Bridge«.
 
 Im Browser nicht selbst implementieren, sondern [client/hwbridge.js](client/hwbridge.js)
 verwenden (wird in die Apps kopiert).

@@ -25,8 +25,9 @@ import (
 const (
 	helloTimeout = 3 * time.Second
 	pingInterval = 20 * time.Second
-	readLimit    = 64 << 10
-	outBuffer    = 256
+	// Ein Druckauftrag kommt als Base64 in einer Nachricht.
+	readLimit = 8 << 20
+	outBuffer = 256
 )
 
 // Server nimmt WebSocket-Verbindungen an.
@@ -258,7 +259,7 @@ func (ss *session) dispatch(ctx context.Context, method string, raw json.RawMess
 		return nil, device.Errf("bad_request", "hello nur einmal")
 	}
 	kind, cmd, ok := strings.Cut(method, ".")
-	if !ok || kind != "scale" {
+	if !ok || (kind != "scale" && kind != "printer") {
 		return nil, device.Errf("unknown_method", method+" gibt es nicht")
 	}
 	var p deviceParams
@@ -266,6 +267,10 @@ func (ss *session) dispatch(ctx context.Context, method string, raw json.RawMess
 	dev, derr := ss.srv.mgr.Lookup(kind, p.Device)
 	if derr != nil {
 		return nil, derr
+	}
+	if kind == "printer" {
+		// Drucker haben keinen Live-Stream; ihr Zustand kommt als device.state.
+		return dev.Handle(ctx, cmd, raw)
 	}
 	switch cmd {
 	case "subscribe":

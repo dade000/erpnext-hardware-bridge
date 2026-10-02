@@ -111,7 +111,8 @@ func (m *Manager) Apply(cfgs []config.DeviceConfig) {
 			defer close(r.done)
 			dev.Run(ctx)
 		}()
-		m.log.Info("Gerät gestartet", "device", c.ID, "kind", c.Kind, "driver", c.Driver, "port", c.Port.String())
+		// Der Treiber kennt sein Ziel (serieller Port, Adresse, Warteschlange).
+		m.log.Info("Gerät gestartet", "device", c.ID, "kind", c.Kind, "driver", c.Driver, "port", dev.Status().Port)
 	}
 }
 

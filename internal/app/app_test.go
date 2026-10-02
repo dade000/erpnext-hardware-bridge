@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -340,5 +342,77 @@ func TestUIGuardsAndConfigUpdate(t *testing.T) {
 	code, body = get(t, fmt.Sprintf("http://127.0.0.1:%d/weight", e.compat), "u", "p", nil)
 	if code != 500 {
 		t.Fatalf("/weight ohne Waage: %d %s", code, body)
+	}
+}
+
+// Der Weg eines Labels: Desk → WebSocket → Bridge → Netzwerkdrucker (9100).
+// Was das Desk schickt, muss unverändert am Drucker ankommen, auch wenn es
+// größer ist als eine übliche Steuernachricht.
+func TestWebSocketPrintsLabelUnchanged(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	received := make(chan []byte, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			b, _ := io.ReadAll(c)
+			c.Close()
+			if len(b) > 0 { // die Erreichbarkeitsprüfung schickt nichts
+				received <- b
+			}
+		}
+	}()
+
+	e := setup(t)
+	cfg := e.app.Config().Clone()
+	cfg.Devices = append(cfg.Devices, config.DeviceConfig{
+		ID: "labeldrucker", Kind: "printer", Driver: "raw_tcp", Address: ln.Addr().String(),
+	})
+	cfg.ApplyDefaults()
+	if _, err := e.app.Update(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	cl, _, err := dial(t, "localhost", e.port, origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := cl.hello(); !h.OK || !strings.Contains(string(h.Result), `"labeldrucker"`) {
+		t.Fatalf("hello ohne Drucker: %s", h.Result)
+	}
+
+	// Ein Label mit eingebetteter Grafik: deutlich über 64 KB als Base64.
+	zpl := []byte("^XA^CI28^FO10,10^FDÖsterreichische Post 0,00 kg^FS" + strings.Repeat("^GFA,8,8,1,FFFFFFFFFFFFFFFF", 6000) + "^XZ")
+	r := cl.call("printer.print", map[string]string{
+		"device": "labeldrucker", "format": "zpl", "title": "SHIPMENT-00150",
+		"data": base64.StdEncoding.EncodeToString(zpl),
+	})
+	if !r.OK {
+		t.Fatalf("print: %+v", r.Error)
+	}
+	select {
+	case got := <-received:
+		if !bytes.Equal(got, zpl) {
+			t.Fatalf("am Drucker kamen %d Bytes an, geschickt %d", len(got), len(zpl))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("am Drucker kam nichts an")
+	}
+
+	// Ohne Geräte-ID: erster Drucker der Station.
+	if r := cl.call("printer.print", map[string]string{"format": "zpl", "data": base64.StdEncoding.EncodeToString([]byte("^XA^XZ"))}); !r.OK {
+		t.Fatalf("print ohne device: %+v", r.Error)
+	}
+	if r := cl.call("printer.print", map[string]string{"format": "pdf", "data": "JVBERi0="}); r.OK || r.Error.Code != "unsupported_format" {
+		t.Fatalf("pdf muss abgelehnt werden: %+v", r)
+	}
+	if r := cl.call("printer.print", map[string]string{"device": "waage", "format": "zpl", "data": "XlhB"}); r.OK || r.Error.Code != "device_missing" {
+		t.Fatalf("Waage ist kein Drucker: %+v", r)
 	}
 }

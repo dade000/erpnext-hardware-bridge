@@ -72,6 +72,32 @@ func TestValidateCollectsErrors(t *testing.T) {
 	}
 }
 
+func TestValidatePrinters(t *testing.T) {
+	good := &Config{ListenPort: 8735, LogLevel: "info", Devices: []DeviceConfig{
+		{ID: "netz", Kind: "printer", Driver: "raw_tcp", Address: "192.168.1.60:9100"},
+		{ID: "usb", Kind: "printer", Driver: "raw_file", Port: PortSpec{Path: "/dev/usb/lp0"}},
+		{ID: "os", Kind: "printer", Driver: "system", Queue: "Zebra_ZD421"},
+	}}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("gültige Drucker abgelehnt: %v", err)
+	}
+	bad := &Config{ListenPort: 8735, LogLevel: "info", Devices: []DeviceConfig{
+		{ID: "a", Kind: "printer", Driver: "raw_tcp", Address: "192.168.1.60"},
+		{ID: "b", Kind: "printer", Driver: "raw_tcp", Address: "host:99999"},
+		{ID: "c", Kind: "printer", Driver: "raw_file"},
+		{ID: "d", Kind: "printer", Driver: "system", Queue: "  "},
+	}}
+	err := bad.Validate()
+	if err == nil {
+		t.Fatal("erwartet Fehler")
+	}
+	for _, want := range []string{"nicht host:port", "keinen gültigen Port", "port.path fehlt", "queue fehlt"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Fehler %q fehlt in:\n%v", want, err)
+		}
+	}
+}
+
 func TestSaveAtomicWithBackup(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "sub", "bridge.yaml")
 	c := Default()

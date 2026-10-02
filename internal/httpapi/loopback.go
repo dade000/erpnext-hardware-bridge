@@ -18,6 +18,7 @@ import (
 	"erpnext-hardware-bridge/internal/config"
 	"erpnext-hardware-bridge/internal/device"
 	"erpnext-hardware-bridge/internal/netutil"
+	"erpnext-hardware-bridge/internal/printer"
 	"erpnext-hardware-bridge/internal/serialport"
 	"erpnext-hardware-bridge/internal/ws"
 )
@@ -87,6 +88,22 @@ func NewLoopback(rt Runtime, port int, log *slog.Logger) http.Handler {
 		writeJSON(w, 200, ports)
 	})
 
+	// Druckwarteschlangen des Betriebssystems, als Vorschlagsliste für den
+	// Treiber "system".
+	mux.HandleFunc("GET /api/printers", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		queues, err := printer.ListQueues(ctx)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		if queues == nil {
+			queues = []string{}
+		}
+		writeJSON(w, 200, queues)
+	})
+
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
 		c := rt.Config().Clone()
 		if c.Token != "" {
@@ -138,9 +155,14 @@ func NewLoopback(rt Runtime, port int, log *slog.Logger) http.Handler {
 			writeJSON(w, 404, map[string]any{"ok": false, "error": device.Errf("device_missing", "Gerät nicht gefunden (erst speichern?)")})
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		// Waage: eine Messung. Drucker: ein Testetikett.
+		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 		defer cancel()
-		res, err := dev.Handle(ctx, "read", nil)
+		cmd := "read"
+		if dev.Kind() == printer.Kind {
+			cmd = "test"
+		}
+		res, err := dev.Handle(ctx, cmd, nil)
 		if err != nil {
 			var de *device.Error
 			if !errors.As(err, &de) {

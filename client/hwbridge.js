@@ -20,6 +20,8 @@
  *   hw.on("scale.weight", (w) => …);          // {kg, raw, stable, unit, ts}
  *   hw.subscribe("scale");                     // bleibt über Reconnects bestehen
  *   const w = await hw.call("scale.read");
+ *   hw.devicesOfKind("printer");               // [{id, kind, driver, state, …}]
+ *   await hw.print("labeldrucker", base64Zpl, "SHIPMENT-00150");
  */
 (function (root) {
 	"use strict";
@@ -28,6 +30,9 @@
 	var DEFAULT_URL = "ws://localhost:8735/ws";
 	var CONNECT_TIMEOUT_MS = 1500;
 	var CALL_TIMEOUT_MS = 6000;
+	// Ein Druckauftrag darf länger dauern als eine Messung: die Bridge wartet
+	// selbst bis zu 20 s auf den Drucker.
+	var PRINT_TIMEOUT_MS = 25000;
 	var BACKOFF_MS = [1000, 2000, 5000, 10000, 30000];
 
 	function HardwareBridge(opts) {
@@ -93,6 +98,15 @@
 			if (this.devices[id].kind === kindOrId) return this.devices[id];
 		}
 		return null;
+	};
+
+	/** Alle Geräte einer Klasse, in der Reihenfolge der Bridge. */
+	P.devicesOfKind = function (kind) {
+		var out = [];
+		for (var id in this.devices) {
+			if (this.devices[id].kind === kind) out.push(this.devices[id]);
+		}
+		return out;
 	};
 
 	/** Zustand aus Sicht einer Seite, die ein Gerät dieser Klasse braucht. */
@@ -220,7 +234,7 @@
 		if (this._ws) this._ws.close();
 	};
 
-	P._send = function (msg, fn) {
+	P._send = function (msg, fn, timeoutMs) {
 		var self = this;
 		if (!this._ws || this._ws.readyState !== 1) {
 			if (fn) fn({ code: "no_bridge", message: "Keine Verbindung zur Hardware Bridge" });
@@ -232,14 +246,24 @@
 				timer: setTimeout(function () {
 					delete self._pending[msg.id];
 					fn({ code: "timeout", message: "Bridge hat nicht geantwortet" });
-				}, CALL_TIMEOUT_MS),
+				}, timeoutMs || CALL_TIMEOUT_MS),
 			};
 		}
 		this._ws.send(JSON.stringify(msg));
 	};
 
+	/**
+	 * Rohdaten (ZPL) an einen Drucker der Station schicken. data ist Base64
+	 * und kommt unverändert am Drucker an. device leer = erster Drucker.
+	 */
+	P.print = function (device, data, title, format) {
+		var params = { format: format || "zpl", data: data, title: title || "" };
+		if (device) params.device = device;
+		return this.call("printer.print", params, PRINT_TIMEOUT_MS);
+	};
+
 	/** Kommando senden. Liefert ein Promise; Fehler haben {code, message}. */
-	P.call = function (method, params) {
+	P.call = function (method, params, timeoutMs) {
 		var self = this;
 		return new Promise(function (resolve, reject) {
 			if (self.state !== "ready") {
@@ -248,7 +272,7 @@
 			}
 			self._send({ type: "req", id: self._nextId++, method: method, params: params || {} }, function (err, res) {
 				if (err) reject(err); else resolve(res);
-			});
+			}, timeoutMs);
 		});
 	};
 

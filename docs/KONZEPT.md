@@ -38,7 +38,7 @@ ohne Laufzeitumgebung liefert keine der Lösungen.
 | Waage | PCE-PB 60N, Polling per `Sx` reicht. |
 | Kamera | Bleibt Linux (libgphoto2). Windows-Build ohne Kamera-Modul. |
 | Sicherheit | Bind nur 127.0.0.1, Origin-Allowlist der ERPNext-/POS-Sites. Kein Pairing-Token (Begründung in 7.1); Token bleibt als optionale Härtung vorgesehen. |
-| Drucken | CUPS-Serverdruck bleibt. Bridge bekommt später ein Druckmodul für Arbeitsplatzdrucker, nur für Funktionen, die es noch nicht gibt. |
+| Drucken | Ursprünglich: CUPS-Serverdruck bleibt, Druckmodul später. **Geändert am 2026-10-01**, siehe Abschnitt 16: Die Bridge druckt Labels roh (ZPL) auf einen Drucker der Station; CUPS bleibt als zweiter Weg, PDF über den Browser-Dialog als Notlösung. |
 | POS-Terminal | Bridge leitet den WebSocket 1:1 an das Worldline-Terminal weiter (ersetzt den heutigen nginx-Umweg). Tunnel ohne Config: Kasse öffnet ihn zur Laufzeit mit Ziel aus ERPNext, Bridge vergibt den lokalen Port. |
 | Konfigurationsquelle | Lokale Datei `bridge.yaml` am Stations-PC, gepflegt über die **Konfigurationsoberfläche der Bridge** auf dem eigenen Webport. ERPNext hält keine Stations- oder Gerätekonfiguration. |
 | Übergang | Die Bridge bedient zusätzlich die alten HTTP-Routen `/weight`, `/shot`, `/health` mit Basic-Auth, der Reverse Proxy zeigt auf die Bridge statt auf Flask. Bis zur Kamera-Portierung (Phase 2) reicht die Bridge alles außer `/weight` an Flask weiter (`legacy_upstream`), danach wird Flask abgeschaltet. |
@@ -208,6 +208,13 @@ devices:
     baud: 115200
     terminator: "\r"
 
+  - id: labeldrucker                # Abschnitt 16
+    kind: printer
+    driver: raw_tcp                 # raw_tcp | raw_file | system
+    address: 192.168.1.60:9100      # raw_tcp
+    # port: /dev/usb/lp0            # raw_file
+    # queue: Zebra_ZD421            # system: Name des Druckers im Betriebssystem
+
 http_compat:                        # Übergang für den Frappe-Server
   enabled: true
   listen: 0.0.0.0:5000              # dahinter der bestehende Reverse Proxy
@@ -281,6 +288,8 @@ Methoden und Events:
 | `scale.tare` | req | Sendet `ST` |
 | `camera.capture` | req | `{preview: false}` → JSON-Antwort mit `{bytes, mime, seq}` gefolgt von **einem Binärframe** mit dem JPEG |
 | `camera.reset` | req | Session schließen und neu öffnen |
+| `printer.print` | req | `{device?, format: "zpl", data: "<base64>", title?}` → `{device, bytes, title}`; die Daten gehen unverändert an den Drucker (Abschnitt 16) |
+| `printer.test` | req | Druckt ein eigenes Testetikett |
 | `scan.event` | event | `{code: "…", device: "scanner1", ts: "…"}` |
 | `tunnel.open` | req | `{target: "ws://192.168.1.50:80", subprotocols: ["SIXml"]}` → `{port: 41235}`; die Bridge öffnet einen lokalen Listener auf einem freien Port, gebunden an diese WS-Verbindung |
 | `tunnel.close` | req | Listener schließen (passiert automatisch, wenn die WS-Verbindung endet) |
@@ -561,7 +570,7 @@ alles, was es heute gibt.
 | 1 | Treiber PCE-PB, `scale.*`, HTTP-Kompat `/weight` + `/health`, `hwbridge.js` mit Zustandsmodell, Live-Gewicht + Ausweichmodus (manuelle Eingabe mit Bestätigung) in der Parcel Station, `client_weight_kg` im Sendungsanlegen | Flask abgeschaltet, Live-Gewicht sichtbar, Station läuft auch ohne Bridge |
 | 2 | Kamera (cgo, Build-Tag), `camera.capture`, HTTP-Kompat `/shot`, Photo Station über Bridge + `save_browser_captured_photo` | Kamera-Pfad komplett in Go |
 | 3 | Serieller Scanner, gemeinsame Scan-Quelle im Desk; Tunnel für Worldline-Terminal (`tunnel.open` aus der Kasse, ohne Config) mit Erreichbarkeitsstatus, Kasse blendet Kartenzahlung ohne Terminal aus, nginx-Umweg entfernen | POS ohne Proxy, Scanner ohne Fokusprobleme |
-| 4 | Druckmodul für Arbeitsplatzdrucker (nur neue Funktionen) | |
+| 4 | Druckmodul: Labels roh (ZPL) auf den Drucker der Station, `printer.print` (Abschnitt 16) | **gebaut 2026-10-01**, Windows-Weg nur kompiliert |
 | 5 | Selbst-Update, Windows-Installer | optional |
 
 ## Quellen
@@ -606,3 +615,52 @@ ursprünglichen Text:
   »Weight x kg from …« (Waage per Bridge, manuelle Eingabe, Server-Waage
   oder Artikelgewichte).
 
+## 16. Druckmodul (2026-10-01)
+
+**Entscheidung.** Die Druckerauswahl am Platz bestimmt, in welchem Format ein
+Label beim Carrier angefordert wird, denn ein Label wird je Sendung einmal
+ausgestellt:
+
+| Auswahl in der Parcel Station | Format | Weg |
+|---|---|---|
+| Drucker der Hardware Bridge | ZPL | Desk → Bridge → Drucker, still |
+| CUPS-Drucker | ZPL | ERPNext-Server → Druckserver, still (wie bisher) |
+| „PDF (Druckdialog)“ | PDF vom Carrier | Druckdialog des Browsers – Notlösung für Plätze ohne Labeldrucker |
+
+**Grundsatz: Ein Label wird nicht bearbeitet.** Weder die Bridge noch der
+Server rendern ein Label, wandeln es zwischen ZPL und PDF um oder schreiben
+darin etwas um. Es kommt so am Drucker an, wie der Carrier es geliefert hat
+(Test `TestPrintPassesBytesThroughUnchanged`, `TestWebSocketPrintsLabelUnchanged`).
+Deshalb gibt es keinen Kreuzdruck: Ein PDF-Label geht nicht auf einen
+ZPL-Drucker, ein ZPL-Label nicht in den Druckdialog; das Desk sagt das dem
+Benutzer, statt umzuwandeln. Die Bridge lehnt jedes andere Format als
+`zpl`/`raw` mit `unsupported_format` ab.
+
+**Treiber** (`internal/printer`, Klasse `printer`):
+
+| Treiber | Ziel | Stand |
+|---|---|---|
+| `raw_tcp` | Netzwerkdrucker, Port 9100 | getestet gegen lokalen Listener |
+| `raw_file` | Gerätedatei, z.B. `/dev/usb/lp0` | getestet gegen Datei |
+| `system` | Druckwarteschlange des Betriebssystems, roh: CUPS (`lp -o raw`) bzw. Windows-Spooler (Datentyp `RAW`) | **nur kompiliert**, an keinem echten Drucker geprüft |
+
+Der Zustand (`device.state`) kommt aus einer Erreichbarkeitsprüfung alle
+15 s und nach jedem Auftrag: TCP-Verbindungsaufbau, Existenz der
+Gerätedatei, `lpstat -p` bzw. `OpenPrinter`. Ein Auftrag ist auf 4 MB
+begrenzt; das Leselimit der WebSocket-Verbindung wurde dafür auf 8 MB
+angehoben. Aufträge an einen Drucker laufen nacheinander.
+
+Die Oberfläche hat „+ Drucker“ und „Testetikett drucken“. Das Testetikett ist
+ein eigenes kleines ZPL der Bridge, kein Carrier-Label. `GET /api/printers`
+liefert die Drucker des Betriebssystems als Vorschlagsliste.
+
+**Offen / Risiken**
+
+* Chrome prüft seit 2025 den Zugriff öffentlicher Seiten auf das lokale Netz
+  (»Local Network Access«). Das Desk (https) erreicht `ws://localhost:8735`
+  erst, nachdem der Benutzer die Abfrage des Browsers erlaubt hat oder die
+  Richtlinie `LocalNetworkAccessAllowedForUrls` die ERPNext-Adresse freigibt.
+  Ohne Freigabe sieht das Desk »keine Bridge« – das betrifft auch die Waage.
+* `system` unter Windows und unter CUPS an einem echten Drucker prüfen.
+* Mehrere Kopien, Statusrückmeldung des Druckers (Papier leer) und USB ohne
+  Betriebssystem-Treiber unter Windows sind nicht enthalten.
