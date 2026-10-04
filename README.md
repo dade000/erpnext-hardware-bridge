@@ -18,7 +18,8 @@ Konzept und Entscheidungen: [docs/KONZEPT.md](docs/KONZEPT.md).
 | 0 | Dienst, Konfiguration, Oberfläche, WS-API dual-stack, Origin-/Host-/CSRF-Schutz | fertig |
 | 1 | Waage PCE-PB (Live-Gewicht, Lesen, Tara), `/weight` im Flask-Format, Browser-Client | fertig |
 | 2 | Kamera (libgphoto2, nur Linux) | offen – bis dahin reicht die Bridge `/shot` und `/health` an die Flask-App weiter |
-| 3 | Serieller Scanner, Terminal-Tunnel | offen |
+| 3 | Serieller Scanner | offen |
+| 3 | Zahlungsterminal: feste WebSocket-Weiterleitung `ws://127.0.0.1:<port>` → Terminal im LAN | gebaut; gegen ein nachgebautes Terminal mit der echten TIM-Bibliothek aus der Kasse getestet, an keinem echten Terminal |
 | 4 | Druckmodul: Labels roh (ZPL) und PDFs über IPP/IPPS auf Drucker der Station, Standarddrucker für den Schnelldruck im Desk | gebaut; Netzwerkdrucker, Gerätedatei und IPP gegen Attrappen getestet, IPP-Abfrage gegen einen echten CUPS-Server; Betriebssystem-Warteschlange (CUPS, Windows-Spooler) nur kompiliert, an keinem echten Drucker gedruckt |
 
 ## Schnellstart
@@ -107,6 +108,11 @@ devices:
     default: true                 # Standarddrucker dieses Arbeitsplatzes
     # media: iso_a4_210x297mm     # optional
     # print_scaling: fit          # optional
+  - id: terminal
+    kind: terminal
+    driver: ws_forward            # Zahlungsterminal (Worldline, SIXml)
+    address: 192.168.1.50:80      # Terminal im LAN, spricht nur ws://
+    local_port: 8736              # Kasse: Terminal-IP 127.0.0.1, Port 8736
 http_compat:
   enabled: true
   listen: ":5000"                 # IPv4 und IPv6

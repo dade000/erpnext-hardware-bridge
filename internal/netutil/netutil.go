@@ -93,3 +93,56 @@ func IsLoopbackBind(listen string) bool {
 	ip := net.ParseIP(h)
 	return ip != nil && ip.IsLoopback()
 }
+
+// ForwardTargetAllowed prüft ein Weiterleitungsziel (Terminal-Tunnel, siehe
+// docs/KONZEPT.md Abschnitt 11.1). Erlaubt ist ein Ziel im eigenen Netz:
+// on-link (im Präfix eines eigenen Interfaces) oder privat nach RFC 1918
+// bzw. ULA. Immer verboten sind Loopback, auch als IPv4-mapped (der
+// klassische Umgehungstrick), Link-Local, Multicast, Unspecified und alles
+// Öffentliche. So wird die Bridge kein Proxy ins Internet und erreicht nicht
+// ihre eigene Oberfläche.
+func ForwardTargetAllowed(ip net.IP) error {
+	if ip == nil {
+		return errors.New("keine IP-Adresse")
+	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	switch {
+	case ip.IsLoopback():
+		return fmt.Errorf("%s ist Loopback", ip)
+	case ip.IsUnspecified():
+		return fmt.Errorf("%s ist keine Zieladresse", ip)
+	case ip.IsMulticast():
+		return fmt.Errorf("%s ist Multicast", ip)
+	case ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast():
+		return fmt.Errorf("%s ist Link-Local", ip)
+	case ip.IsPrivate(), onLink(ip):
+		return nil
+	}
+	return fmt.Errorf("%s liegt nicht im eigenen Netz", ip)
+}
+
+// onLinkNets liefert die Präfixe der eigenen Interfaces; austauschbar für Tests.
+var onLinkNets = func() []*net.IPNet {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var out []*net.IPNet
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func onLink(ip net.IP) bool {
+	for _, n := range onLinkNets() {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}

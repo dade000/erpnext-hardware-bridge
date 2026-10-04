@@ -101,6 +101,33 @@ func TestValidatePrinters(t *testing.T) {
 	}
 }
 
+func TestValidateTerminalForwards(t *testing.T) {
+	good := &Config{ListenPort: 8735, LogLevel: "info", Devices: []DeviceConfig{
+		{ID: "terminal", Kind: "terminal", Driver: "ws_forward", Address: "192.168.1.50:80", LocalPort: 8736},
+		{ID: "terminal2", Kind: "terminal", Driver: "ws_forward", Address: "terminal2.lan:80", LocalPort: 8737},
+	}}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("gültige Weiterleitungen abgelehnt: %v", err)
+	}
+	bad := &Config{ListenPort: 8735, LogLevel: "info", Devices: []DeviceConfig{
+		{ID: "a", Kind: "terminal", Driver: "ws_forward", Address: "192.168.1.50", LocalPort: 8736},
+		{ID: "b", Kind: "terminal", Driver: "ws_forward", Address: "127.0.0.1:80", LocalPort: 8737},
+		{ID: "c", Kind: "terminal", Driver: "ws_forward", Address: "192.168.1.51:80", LocalPort: 8735},
+		{ID: "d", Kind: "terminal", Driver: "ws_forward", Address: "192.168.1.52:80", LocalPort: 8736},
+		{ID: "e", Kind: "terminal", Driver: "ws_forward", Address: "192.168.1.53:80"},
+		{ID: "f", Kind: "terminal", Driver: "ws_forward", Address: "192.168.1.54:80", LocalPort: 5000},
+	}, HTTPCompat: HTTPCompat{Enabled: true, Listen: ":5000"}}
+	err := bad.Validate()
+	if err == nil {
+		t.Fatal("erwartet Fehler")
+	}
+	for _, want := range []string{"nicht host:port", "zeigt auf diesen Rechner", "Port der WS-API", `schon "a" zugeordnet`, "local_port 0", "Terminal-Weiterleitung \"f\""} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Fehler %q fehlt in:\n%v", want, err)
+		}
+	}
+}
+
 func TestSaveAtomicWithBackup(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "sub", "bridge.yaml")
 	c := Default()

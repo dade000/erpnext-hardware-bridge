@@ -20,6 +20,7 @@ import (
 	"erpnext-hardware-bridge/internal/netutil"
 	"erpnext-hardware-bridge/internal/printer"
 	"erpnext-hardware-bridge/internal/scale/pce"
+	"erpnext-hardware-bridge/internal/terminal"
 	"erpnext-hardware-bridge/internal/update"
 	"erpnext-hardware-bridge/internal/version"
 	"erpnext-hardware-bridge/internal/ws"
@@ -63,6 +64,7 @@ func New(path string, cfg *config.Config, exists bool, log *slog.Logger, level *
 	a.mgr = device.NewManager(a.bus, log)
 	a.mgr.Register("scale", "pce_pb", pce.New)
 	printer.Register(a.mgr)
+	terminal.Register(a.mgr, func() []string { return a.Config().AllowedOrigins })
 	registerOptional(a.mgr) // Kamera usw. je nach Build-Tag
 	a.ws = ws.NewServer(a.Config, a.mgr, a.bus, log)
 	level.Set(logbuf.ParseLevel(cfg.LogLevel))

@@ -38,7 +38,7 @@ type Config struct {
 // DeviceConfig beschreibt ein angeschlossenes Gerät.
 type DeviceConfig struct {
 	ID     string   `yaml:"id" json:"id"`
-	Kind   string   `yaml:"kind" json:"kind"`     // scale, camera, scanner, printer
+	Kind   string   `yaml:"kind" json:"kind"`     // scale, camera, scanner, printer, terminal
 	Driver string   `yaml:"driver" json:"driver"` // pce_pb, …
 	Port   PortSpec `yaml:"port" json:"port"`
 
@@ -70,6 +70,11 @@ type DeviceConfig struct {
 	// Default: Standarddrucker dieses Arbeitsplatzes für Aufträge ohne
 	// Geräteangabe (Schnelldruck im Desk).
 	Default bool `yaml:"default,omitempty" json:"default,omitempty"`
+
+	// Terminal (ws_forward): Address ist das Ziel im LAN (host:port des
+	// Zahlungsterminals), LocalPort der Port auf 127.0.0.1/::1, den die Kasse
+	// als Terminal-Adresse benutzt.
+	LocalPort int `yaml:"local_port,omitempty" json:"local_port,omitempty"`
 }
 
 // PortSpec wählt einen seriellen Port entweder über den Pfad oder über
@@ -133,7 +138,7 @@ type BasicAuth struct {
 // Bekannte Treiber je Geräteklasse. Nicht enthaltene Treiber werden trotzdem
 // akzeptiert, damit eine Config aus einem neueren Build nicht beim Laden
 // scheitert; das Gerät meldet dann »Treiber nicht enthalten«.
-var knownKinds = map[string]bool{"scale": true, "camera": true, "scanner": true, "printer": true}
+var knownKinds = map[string]bool{"scale": true, "camera": true, "scanner": true, "printer": true, "terminal": true}
 
 // Default liefert eine lauffähige Startkonfiguration ohne Geräte.
 func Default() *Config {
@@ -200,6 +205,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("log_level %q unbekannt (debug, info, warn, error)", c.LogLevel))
 	}
 	seen := map[string]bool{}
+	localPorts := map[int]string{}
 	for i, d := range c.Devices {
 		where := fmt.Sprintf("Gerät %d", i+1)
 		if d.ID != "" {
@@ -215,7 +221,7 @@ func (c *Config) Validate() error {
 		}
 		seen[d.ID] = true
 		if !knownKinds[d.Kind] {
-			errs = append(errs, fmt.Errorf("%s: kind %q unbekannt (scale, camera, scanner, printer)", where, d.Kind))
+			errs = append(errs, fmt.Errorf("%s: kind %q unbekannt (scale, camera, scanner, printer, terminal)", where, d.Kind))
 		}
 		if d.Driver == "" {
 			errs = append(errs, fmt.Errorf("%s: driver fehlt", where))
@@ -265,6 +271,28 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
+		if d.Kind == "terminal" && d.Driver == "ws_forward" {
+			if host, port, err := net.SplitHostPort(d.Address); err != nil || host == "" {
+				errs = append(errs, fmt.Errorf("%s: address %q ist nicht host:port (z.B. 192.168.1.50:80)", where, d.Address))
+			} else if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+				errs = append(errs, fmt.Errorf("%s: address %q hat keinen gültigen Port", where, d.Address))
+			} else if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsUnspecified()) {
+				// Die volle Prüfung (eigenes Netz) läuft beim Verbinden, weil ein
+				// Hostname erst dann aufgelöst wird. Loopback ist aber schon hier
+				// sicher falsch: es wäre die Bridge selbst.
+				errs = append(errs, fmt.Errorf("%s: address %q zeigt auf diesen Rechner, nicht auf das Terminal", where, d.Address))
+			}
+			switch {
+			case d.LocalPort < 1 || d.LocalPort > 65535:
+				errs = append(errs, fmt.Errorf("%s: local_port %d ist kein gültiger Port", where, d.LocalPort))
+			case d.LocalPort == c.ListenPort:
+				errs = append(errs, fmt.Errorf("%s: local_port darf nicht der Port der WS-API (%d) sein", where, d.LocalPort))
+			case localPorts[d.LocalPort] != "":
+				errs = append(errs, fmt.Errorf("%s: local_port %d ist schon %q zugeordnet", where, d.LocalPort, localPorts[d.LocalPort]))
+			default:
+				localPorts[d.LocalPort] = d.ID
+			}
+		}
 		if d.Kind == "scale" {
 			if d.PollMS < 50 || d.PollMS > 10_000 {
 				errs = append(errs, fmt.Errorf("%s: poll_ms muss zwischen 50 und 10000 liegen", where))
@@ -285,6 +313,8 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("http_compat.listen %q: ungültiger Port", h.Listen))
 		} else if n == c.ListenPort {
 			errs = append(errs, fmt.Errorf("http_compat.listen darf nicht den Port der WS-API (%d) verwenden", n))
+		} else if id := localPorts[n]; id != "" {
+			errs = append(errs, fmt.Errorf("http_compat.listen: Port %d ist schon der Terminal-Weiterleitung %q zugeordnet", n, id))
 		}
 		if (h.BasicAuth.User == "") != (h.BasicAuth.Password == "") {
 			errs = append(errs, errors.New("http_compat.basic_auth: user und password nur gemeinsam"))

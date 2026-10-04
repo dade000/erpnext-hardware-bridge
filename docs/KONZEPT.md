@@ -765,3 +765,39 @@ nachgestellten Release-Server, auch über die Oberfläche mit einem echt
 signierten Test-Release. Nicht geprüft: der Neustart durch systemd bzw. den
 Windows-Dienstverwalter an einer echten Installation und ein Lauf des
 Release-Workflows mit dem Signier-Schritt.
+
+## 19. Zahlungsterminal: feste Weiterleitung (2026-10-04)
+
+**Entscheidung.** Abweichend von Abschnitt 11 öffnet die Kasse keinen Tunnel
+per `tunnel.open`. Die Weiterleitung steht fest in `bridge.yaml` (Gerät
+`kind: terminal`, `driver: ws_forward`, `address` = Terminal im LAN,
+`local_port` = Port auf 127.0.0.1/::1) und lauscht, solange die Bridge läuft.
+Im POS Profile steht als Terminal-Adresse `127.0.0.1` mit diesem Port; die
+Kasse spricht die Bridge dafür nicht an. Der bisherige Weg über einen
+Reverse Proxy mit `wss://` (dafür war `timapi.js` umgebaut) entfällt, die
+Kasse benutzt wieder die unveränderte Bibliothek mit `ws://`. Ohne Bridge
+gibt es an einer Kasse keine Kartenzahlung; die Kasse sagt das.
+
+**Warum.** Vom Benutzer so gewünscht: das Terminal gehört zum Platz, wie
+Waage und Drucker, und wird dort eingerichtet.
+
+**Was aus 11.1 bleibt.** Origin-Prüfung (dieselben `allowed_origins` wie die
+WS-API) und Host-Prüfung (DNS-Rebinding) am Listener, bevor das Terminal
+überhaupt angesprochen wird; nur WebSocket-Handshakes; Ziel nur im eigenen
+Netz (on-link, RFC 1918, ULA), aufgelöst und geprüft vor dem Verbinden; nur
+Auf- und Abbau im Log, nie Inhalte. Entfallen sind die Bindung an eine
+WS-Session und die Grenze von zwei Tunneln, weil es keine Session gibt.
+
+**Umsetzung.** Der Handshake der Kasse wird gelesen, geprüft und unverändert
+an das Terminal weitergegeben (nur `Host` zeigt aufs Terminal), danach
+werden Bytes in beide Richtungen durchgereicht – ohne die Frames zu deuten.
+Der Testknopf baut nur eine TCP-Verbindung auf und gleich wieder ab, weil
+das Terminal nur eine Verbindung zulässt. Ist der Port belegt, versucht die
+Bridge alle 5 s erneut und zeigt den Fehler in der Oberfläche.
+
+**Stand.** Getestet mit Unit-Tests und im Browser: die Kasse auf
+`https://erp-dev…/kassa` verbindet mit der echten TIM-Bibliothek über die
+Bridge zu einem nachgebauten Terminal (Handshake mit Subprotokoll `SIXml`,
+erste SIXml-Nachricht kommt an); eine fremde Seite wird abgewiesen. Nicht
+geprüft: ein echtes Worldline-Terminal.
+

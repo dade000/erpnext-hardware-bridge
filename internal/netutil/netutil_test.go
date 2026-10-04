@@ -68,3 +68,23 @@ func TestLoopbackBind(t *testing.T) {
 		}
 	}
 }
+
+func TestForwardTargetAllowed(t *testing.T) {
+	_, lan, _ := net.ParseCIDR("2a02:8388::/64")
+	orig := onLinkNets
+	onLinkNets = func() []*net.IPNet { return []*net.IPNet{lan} }
+	defer func() { onLinkNets = orig }()
+
+	for addr, want := range map[string]bool{
+		"192.168.1.50": true, "10.0.0.7": true, "172.16.4.2": true, "fd12::5": true,
+		"2a02:8388::50": true, // on-link, Provider-Präfix
+		"127.0.0.1":     false, "::1": false, "::ffff:127.0.0.1": false,
+		"0.0.0.0": false, "::": false, "169.254.1.1": false, "fe80::1": false,
+		"224.0.0.1": false, "8.8.8.8": false, "2001:4860::8888": false,
+	} {
+		err := ForwardTargetAllowed(net.ParseIP(addr))
+		if (err == nil) != want {
+			t.Errorf("%s: erlaubt=%v, err=%v", addr, err == nil, err)
+		}
+	}
+}

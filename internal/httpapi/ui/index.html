@@ -117,6 +117,7 @@ pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-hei
       <div class="row">
         <button class="btn" id="add-scale">+ Waage</button>
         <button class="btn" id="add-printer">+ Drucker</button>
+        <button class="btn" id="add-terminal">+ Zahlungsterminal</button>
         <button class="btn" id="rescan">Ports neu suchen</button>
         <span class="muted small" id="ports-info"></span>
       </div>
@@ -184,6 +185,10 @@ function fmtLast(d) {
     const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
     return `<span class="weight">${l.kg.toFixed(3)} kg</span> ${l.stable ? "stabil" : '<span class="muted">bewegt</span>'}<div class="muted small">roh „${esc(l.raw)}“, vor ${age}s</div>`;
   }
+  if (d.kind === "terminal" && l.ts) {
+    const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
+    return `zuletzt verbunden vor ${age}s`;
+  }
   if (d.kind === "printer" && l.ts) {
     const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
     return `letzter Druck vor ${age}s<div class="muted small">${esc(l.title || "")} · ${esc(l.format)} · ${l.bytes} Bytes</div>`;
@@ -192,6 +197,12 @@ function fmtLast(d) {
 }
 function fmtStats(s) {
   if (!s) return "";
+  if (typeof s.sessions === "number") {
+    const parts = [`${s.active} offen`, `${s.sessions} Verbindungen`];
+    if (s.refused) parts.push(`${s.refused} abgelehnt`);
+    if (s.failures) parts.push(`${s.failures} fehlgeschlagen${s.last_error ? " („" + esc(s.last_error) + "“)" : ""}`);
+    return `<div class="muted small">${parts.join(" · ")}</div>`;
+  }
   if (typeof s.jobs === "number") {
     const parts = [`${s.jobs} Aufträge`];
     if (s.failures) parts.push(`${s.failures} fehlgeschlagen${s.last_error ? " („" + esc(s.last_error) + "“)" : ""}`);
@@ -216,7 +227,7 @@ async function refreshStatus() {
   $("status-notices").innerHTML = notes.join("");
   $("devices").innerHTML = s.devices.length ? s.devices.map((d) => `<tr>
       <td><b>${esc(d.id)}</b>${d.default ? ' <span class="badge b-online">Standard</span>' : ""}<div class="muted small">${esc(d.kind)} / ${esc(d.driver)}${(d.formats || []).length ? " · " + esc(d.formats.join(", ").toUpperCase()) : ""}</div></td>
-      <td><span class="badge b-${esc(d.state)}">${esc(STATE_DE[d.state] || d.state)}</span>${d.message ? `<div class="small">${esc(d.message)}</div>` : ""}</td>
+      <td><span class="badge b-${esc(d.state)}">${esc(d.kind === "terminal" && d.state === "online" ? "bereit" : STATE_DE[d.state] || d.state)}</span>${d.message ? `<div class="small">${esc(d.message)}</div>` : ""}</td>
       <td>${fmtLast(d)}${fmtStats(d.stats)}</td>
       <td class="small">${esc(d.port)}</td></tr>`).join("")
     : '<tr><td colspan="4" class="muted">Keine Geräte eingerichtet.</td></tr>';
@@ -410,7 +421,7 @@ function renderDevices() {
     return `<div class="device" data-i="${i}">
       <div class="device-head"><b>${esc(d.id || "neues Gerät")}</b>
         <div class="row">
-          <button class="btn" data-act="test">${d.kind === "printer" ? "Testdruck" : "Testen"}</button>
+          <button class="btn" data-act="test">${d.kind === "printer" ? "Testdruck" : d.kind === "terminal" ? "Erreichbar?" : "Testen"}</button>
           <button class="btn danger" data-act="remove">Entfernen</button>
         </div>
       </div>
@@ -431,7 +442,10 @@ function renderDevices() {
         <label>Stabil nach n gleichen Werten<input data-f="stable_samples" type="number" min="1" max="50" value="${d.stable_samples || 4}"></label>
         <label>Toleranz (kg)<input data-f="stable_tolerance_kg" type="number" step="0.001" min="0" value="${d.stable_tolerance_kg ?? 0.005}"></label>` : d.kind === "printer" ? `${printerFields(d, i)}
         <label class="check" style="grid-column:1/-1"><input type="checkbox" data-f="default" ${d.default ? "checked" : ""}>Standarddrucker dieses Arbeitsplatzes (für den Schnelldruck im ERPNext, je Format einer)</label>
-        <p class="muted small" style="grid-column:1/-1">${printerNote(d)}</p>` : `<p class="muted small" style="grid-column:1/-1">Geräteklasse ${esc(d.kind)}: Einstellungen folgen mit dem Treiber (Kamera Phase 2, Scanner Phase 3). Bis dahin nur ID und Treiber.</p>`}
+        <p class="muted small" style="grid-column:1/-1">${printerNote(d)}</p>` : d.kind === "terminal" ? `
+        <label>Terminal (IP:Port im LAN)<input data-f="address" value="${esc(d.address)}" placeholder="192.168.1.50:80"></label>
+        <label>Lokaler Port<input data-f="local_port" type="number" min="1" max="65535" value="${d.local_port || ""}"></label>
+        <p class="muted small" style="grid-column:1/-1">Die Kasse verbindet sich mit <code>ws://127.0.0.1:${d.local_port || "PORT"}</code>, die Bridge reicht die Verbindung unverändert ans Terminal weiter. Im POS Profile als Terminal-IP <code>127.0.0.1</code> und als Port <code>${d.local_port || "PORT"}</code> eintragen. Angenommen werden nur Verbindungen von den erlaubten Origins; das Ziel muss im eigenen Netz liegen.</p>` : `<p class="muted small" style="grid-column:1/-1">Geräteklasse ${esc(d.kind)}: Einstellungen folgen mit dem Treiber (Kamera Phase 2, Scanner Phase 3). Bis dahin nur ID und Treiber.</p>`}
       </div>
       <div class="small" data-out="test"></div>
     </div>`;
@@ -455,6 +469,7 @@ function onDeviceEdit(ev) {
       if (d.kind === "printer" && ev.type === "change") renderDevices();
       return;
     case "address": d.address = v.trim(); return;
+    case "local_port": d.local_port = parseInt(v, 10) || 0; return;
     case "queue": d.queue = v.trim(); return;
     case "uri": d.uri = v.trim(); return;
     case "media": d.media = v.trim(); return;
@@ -485,12 +500,14 @@ $("c-devices").addEventListener("click", async (ev) => {
     return;
   }
   const out = card.querySelector('[data-out="test"]');
-  out.innerHTML = `<span class="muted">${d.kind === "printer" ? "Drucke…" : "Messe…"}</span>`;
+  out.innerHTML = `<span class="muted">${d.kind === "printer" ? "Drucke…" : d.kind === "terminal" ? "Verbinde…" : "Messe…"}</span>`;
   const r = await api("POST", `/api/devices/${encodeURIComponent(d.id)}/test`);
   if (r.data.ok) {
     const x = r.data.result;
     out.innerHTML = d.kind === "printer"
       ? `<div class="notice n-ok">${x.format === "pdf" ? "Testseite (PDF)" : "Testetikett (ZPL)"} gesendet (${x.bytes} Bytes). Kommt nichts aus dem Drucker, stimmt der Anschluss oder die Druckersprache nicht.</div>`
+      : d.kind === "terminal"
+      ? `<div class="notice n-ok">Terminal ${esc(x.target)} antwortet (${x.ms} ms).</div>`
       : `<div class="notice n-ok">Antwort: <b>${x.kg.toFixed(3)} kg</b> (roh „${esc(x.raw)}“)</div>`;
   } else {
     const e = r.data.error || {};
@@ -508,6 +525,15 @@ $("add-printer").addEventListener("click", () => {
   const n = cfg.devices.filter((d) => d.kind === "printer").length;
   cfg.devices.push({ id: n ? `labeldrucker${n + 1}` : "labeldrucker", kind: "printer",
     driver: (drivers.printer || ["raw_tcp"])[0], address: "", queue: "", port: {} });
+  renderDevices();
+});
+$("add-terminal").addEventListener("click", () => {
+  const n = cfg.devices.filter((d) => d.kind === "terminal").length;
+  const used = new Set(cfg.devices.map((d) => d.local_port).filter(Boolean));
+  let port = 8736;
+  while (used.has(port) || port === (cfg.listen_port || 8735)) port++;
+  cfg.devices.push({ id: n ? `terminal${n + 1}` : "terminal", kind: "terminal", driver: "ws_forward",
+    address: "", local_port: port, port: {} });
   renderDevices();
 });
 $("rescan").addEventListener("click", async () => { await Promise.all([loadPorts(), loadQueues()]); renderDevices(); });
