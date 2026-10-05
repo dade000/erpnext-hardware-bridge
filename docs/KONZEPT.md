@@ -791,6 +791,8 @@ WS-Session und die Grenze von zwei Tunneln, weil es keine Session gibt.
 **Umsetzung.** Der Handshake der Kasse wird gelesen, geprüft und unverändert
 an das Terminal weitergegeben (nur `Host` zeigt aufs Terminal), danach
 werden Bytes in beide Richtungen durchgereicht – ohne die Frames zu deuten.
+Ins Log kommt die Statuszeile der Terminal-Antwort auf den Handshake (101
+oder z. B. 404), damit ein falscher Port oder Pfad sofort auffällt.
 Der Testknopf baut nur eine TCP-Verbindung auf und gleich wieder ab, weil
 das Terminal nur eine Verbindung zulässt. Ist der Port belegt, versucht die
 Bridge alle 5 s erneut und zeigt den Fehler in der Oberfläche.

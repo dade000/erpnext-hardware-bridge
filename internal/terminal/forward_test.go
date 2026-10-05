@@ -187,3 +187,31 @@ func TestDialRefusesLoopbackTarget(t *testing.T) {
 		t.Fatalf("Loopback-Ziel nicht abgelehnt: %v", err)
 	}
 }
+
+// Ein Terminal, das den Pfad nicht kennt, antwortet ohne 101. Die Kasse
+// bekommt die Antwort unverändert, der Status sagt, was das Terminal meinte.
+func TestTerminalRejectsHandshake(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		http.ReadRequest(bufio.NewReader(c))
+		io.WriteString(c, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+	}()
+	f, port, _ := start(t, l.Addr().String())
+
+	_, _, status := handshake(t, port, "127.0.0.1:"+itoa(port), origin)
+	if !strings.Contains(status, "404") {
+		t.Fatalf("Antwort des Terminals nicht weitergegeben: %q", status)
+	}
+	if st := f.Status(); st.State != device.StateOffline || !strings.Contains(st.Message, "404") {
+		t.Fatalf("Status %+v", st)
+	}
+}

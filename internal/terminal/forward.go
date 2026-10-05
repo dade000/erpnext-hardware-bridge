@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -206,21 +207,32 @@ func (f *Forward) handle(ctx context.Context, c net.Conn, conns *sync.Map) {
 		f.refuse(c, http.StatusBadGateway, "Terminal nicht erreichbar", err)
 		return
 	}
-	// Was die Kasse schon hinter dem Handshake geschickt hat, liegt im Puffer.
-	if n := br.Buffered(); n > 0 {
-		b, _ := br.Peek(n)
-		if _, err := t.Write(b); err != nil {
-			f.fail(err)
-			return
-		}
-		_, _ = br.Discard(n)
+	// Die Antwort des Terminals auf den Handshake mitlesen und unverändert
+	// weitergeben. Ins Log kommt nur die Statuszeile: daran sieht man, ob das
+	// Terminal den WebSocket annimmt (101) oder etwa den Pfad nicht kennt.
+	_ = t.SetReadDeadline(time.Now().Add(handshakeTimeout))
+	tr := bufio.NewReader(t)
+	head, status, proto, err := readResponseHead(tr)
+	if err != nil {
+		f.fail(fmt.Errorf("keine Antwort auf den Handshake: %w", err))
+		f.refuse(c, http.StatusBadGateway, "Terminal antwortet nicht", err)
+		return
+	}
+	if _, err := c.Write(head); err != nil {
+		return
 	}
 	_ = c.SetDeadline(time.Time{})
+	_ = t.SetReadDeadline(time.Time{})
+	if !strings.Contains(status, " 101 ") {
+		f.log.Warn("Terminal nimmt den WebSocket nicht an", "antwort", status, "target", f.cfg.Address, "pfad", req.RequestURI)
+		f.fail(fmt.Errorf("Terminal antwortet %q", status))
+		return
+	}
 
 	f.begin()
-	f.log.Info("Kasse mit Terminal verbunden", "origin", origin, "target", f.cfg.Address)
+	f.log.Info("Kasse mit Terminal verbunden", "origin", origin, "target", f.cfg.Address, "protokoll", proto)
 	start := time.Now()
-	pipe(c, t)
+	pipe(c, br, t, tr)
 	f.end()
 	f.log.Info("Verbindung zum Terminal beendet", "dauer", time.Since(start).Round(time.Second).String())
 }
@@ -236,16 +248,41 @@ func writeHandshake(w io.Writer, req *http.Request, host string) error {
 	return err
 }
 
+// readResponseHead liest die Antwort des Terminals bis zur Leerzeile und
+// liefert sie roh zurück, dazu Statuszeile und Subprotokoll.
+func readResponseHead(r *bufio.Reader) (head []byte, status, proto string, err error) {
+	for {
+		line, err := r.ReadString('\n')
+		head = append(head, line...)
+		if err != nil {
+			return head, status, proto, err
+		}
+		t := strings.TrimRight(line, "\r\n")
+		switch {
+		case status == "":
+			status = t
+		case t == "":
+			return head, status, proto, nil
+		case strings.HasPrefix(strings.ToLower(t), "sec-websocket-protocol:"):
+			proto = strings.TrimSpace(t[len("sec-websocket-protocol:"):])
+		}
+		if len(head) > 16<<10 {
+			return head, status, proto, errors.New("Antwortkopf zu lang")
+		}
+	}
+}
+
 // pipe kopiert in beide Richtungen, bis eine Seite schliesst. Inhalte werden
-// weder gelesen noch protokolliert (Zahlungsdaten).
-func pipe(a, b net.Conn) {
+// weder gelesen noch protokolliert (Zahlungsdaten). Gelesen wird über die
+// Puffer des Handshakes, damit dort schon liegende Bytes nicht verloren gehen.
+func pipe(a net.Conn, ar io.Reader, b net.Conn, br io.Reader) {
 	done := make(chan struct{}, 2)
-	cp := func(dst, src net.Conn) {
+	cp := func(dst net.Conn, src io.Reader) {
 		_, _ = io.Copy(dst, src)
 		done <- struct{}{}
 	}
-	go cp(a, b)
-	go cp(b, a)
+	go cp(a, br)
+	go cp(b, ar)
 	<-done
 	// Eine Seite ist zu: die andere auch schliessen, damit die zweite Kopie endet.
 	a.Close()

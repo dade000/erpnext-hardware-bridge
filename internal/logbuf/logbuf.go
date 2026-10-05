@@ -102,9 +102,24 @@ func (rf *RotatingFile) Close() error {
 // Setup baut den Logger. level lässt sich zur Laufzeit ändern.
 func Setup(ring *Ring, extra ...io.Writer) (*slog.Logger, *slog.LevelVar) {
 	lv := new(slog.LevelVar)
-	w := io.MultiWriter(append([]io.Writer{os.Stdout, ring}, extra...)...)
+	w := allWriters(append([]io.Writer{ring}, append(extra, os.Stdout)...))
 	h := slog.NewTextHandler(w, &slog.HandlerOptions{Level: lv})
 	return slog.New(h), lv
+}
+
+// allWriters schreibt in jedes Ziel, auch wenn ein anderes scheitert.
+//
+// io.MultiWriter bricht beim ersten Fehler ab. Als Windows-Dienst hat die
+// Bridge keine Konsole, das Schreiben auf stdout scheitert dort -- mit
+// MultiWriter kam dadurch keine Zeile mehr in der Oberfläche und in der
+// Logdatei an.
+type allWriters []io.Writer
+
+func (ws allWriters) Write(p []byte) (int, error) {
+	for _, w := range ws {
+		_, _ = w.Write(p)
+	}
+	return len(p), nil
 }
 
 // ParseLevel übersetzt log_level aus der Config.
