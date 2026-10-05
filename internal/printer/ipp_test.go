@@ -146,6 +146,13 @@ func TestIPPReportsOnlyFormatsThePrinterNames(t *testing.T) {
 	if err := limited.Check(ctx); err != nil || strings.Join(limited.Formats(), ",") != "pdf" {
 		t.Fatalf("accept=pdf: %v %v", err, limited.Formats())
 	}
+	// Eine Roh-Warteschlange vor einem Bondrucker: Rohdaten heißen ESC/POS.
+	_, bon := newFakeIPP(t, "application/pdf", "application/vnd.cups-raw")
+	bon.Accept = "escpos"
+	bonSink := newIPPSink(bon)
+	if err := bonSink.Check(ctx); err != nil || strings.Join(bonSink.Formats(), ",") != "escpos" {
+		t.Fatalf("accept=escpos: %v %v", err, bonSink.Formats())
+	}
 	// PDF ist bei IPP Everywhere optional: nur Raster heißt »nicht nutzbar«.
 	_, cfg := newFakeIPP(t, "image/pwg-raster", "image/jpeg")
 	sink := newIPPSink(cfg)

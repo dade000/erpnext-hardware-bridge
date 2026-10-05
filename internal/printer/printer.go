@@ -9,11 +9,15 @@
 //
 // Vier Wege zum Drucker:
 //
-//	raw_tcp   Netzwerkdrucker, Port 9100 (JetDirect/RAW)                  zpl
-//	raw_file  Gerätedatei, z.B. /dev/usb/lp0                              zpl
-//	system    Druckwarteschlange des Betriebssystems, roh                 zpl
-//	ipp       IPP/IPPS-Drucker oder CUPS-Server; Formate meldet der       pdf, zpl
+//	raw_tcp   Netzwerkdrucker, Port 9100 (JetDirect/RAW)                  zpl oder escpos
+//	raw_file  Gerätedatei, z.B. /dev/usb/lp0                              zpl oder escpos
+//	system    Druckwarteschlange des Betriebssystems, roh                 zpl oder escpos
+//	ipp       IPP/IPPS-Drucker oder CUPS-Server; Formate meldet der       pdf, zpl/escpos
 //	          Drucker selbst (PDF nur, wenn er es nativ annimmt)
+//
+// Rohdaten sind Rohdaten: ob dahinter ein Etikettendrucker (ZPL) oder ein
+// Bondrucker (ESC/POS) steht, kann die Bridge nicht sehen. Das sagt accept
+// in der Konfiguration; ohne Angabe gilt ZPL wie bisher.
 package printer
 
 import (
@@ -45,7 +49,7 @@ const (
 // Job ist ein Druckauftrag.
 type Job struct {
 	Title  string
-	Format string // "zpl" oder "pdf"
+	Format string // "zpl", "escpos" oder "pdf"
 	Data   []byte
 }
 
@@ -66,6 +70,22 @@ type Sink interface {
 type rawOnly struct{}
 
 func (rawOnly) Formats() []string { return []string{"zpl"} }
+
+// rawLanguage legt fest, welche Druckersprache hinter einem Rohdrucker steht.
+type rawLanguage struct {
+	Sink
+	format string
+}
+
+func (r rawLanguage) Formats() []string { return []string{r.format} }
+
+// rawSink setzt die Sprache aus accept, wenn sie nicht ZPL ist.
+func rawSink(cfg config.DeviceConfig, s Sink) Sink {
+	if cfg.Accept == "escpos" {
+		return rawLanguage{Sink: s, format: "escpos"}
+	}
+	return s
+}
 
 // LastJob beschreibt den letzten Auftrag (Statusseite).
 type LastJob struct {
@@ -206,6 +226,9 @@ func (p *Printer) Handle(ctx context.Context, cmd string, raw json.RawMessage) (
 		if Accepts(formats, "zpl") {
 			return p.print(ctx, "zpl", "Testdruck", testLabel(p.cfg.ID))
 		}
+		if Accepts(formats, "escpos") {
+			return p.print(ctx, "escpos", "Testdruck", testReceipt(p.cfg.ID))
+		}
 		return p.print(ctx, "pdf", "Testdruck", testPDF(p.cfg.ID))
 	}
 	return nil, device.Errf("unknown_method", "printer."+cmd+" gibt es nicht")
@@ -265,8 +288,11 @@ func (p *Printer) poke() {
 // Formatlisten. "raw" ist der alte Name für Rohdaten in Druckersprache.
 func NormalizeFormat(f string) string {
 	f = strings.ToLower(strings.TrimSpace(f))
-	if f == "raw" {
+	switch f {
+	case "raw":
 		return "zpl"
+	case "esc/pos", "esc_pos":
+		return "escpos"
 	}
 	return f
 }
@@ -303,13 +329,13 @@ func Pick(statuses []device.Status, format string) string {
 // Register macht die Druckertreiber dem Manager bekannt.
 func Register(m *device.Manager) {
 	m.Register(Kind, "raw_tcp", func(cfg config.DeviceConfig, bus *device.Bus, log *slog.Logger) device.Device {
-		return NewWithSink(cfg, bus, log, &tcpSink{addr: cfg.Address})
+		return NewWithSink(cfg, bus, log, rawSink(cfg, &tcpSink{addr: cfg.Address}))
 	})
 	m.Register(Kind, "raw_file", func(cfg config.DeviceConfig, bus *device.Bus, log *slog.Logger) device.Device {
-		return NewWithSink(cfg, bus, log, &fileSink{path: cfg.Port.Path})
+		return NewWithSink(cfg, bus, log, rawSink(cfg, &fileSink{path: cfg.Port.Path}))
 	})
 	m.Register(Kind, "system", func(cfg config.DeviceConfig, bus *device.Bus, log *slog.Logger) device.Device {
-		return NewWithSink(cfg, bus, log, newSystemSink(cfg.Queue))
+		return NewWithSink(cfg, bus, log, rawSink(cfg, newSystemSink(cfg.Queue)))
 	})
 	m.Register(Kind, "ipp", func(cfg config.DeviceConfig, bus *device.Bus, log *slog.Logger) device.Device {
 		return NewWithSink(cfg, bus, log, newIPPSink(cfg))

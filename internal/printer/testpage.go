@@ -16,6 +16,20 @@ func testLabel(id string) []byte {
 		"^XZ")
 }
 
+// testReceipt ist ein kurzer Testbon in ESC/POS: Drucker zurücksetzen, drei
+// Zeilen (die erste fett), Vorschub, Schnitt. Nur ASCII, damit keine
+// Zeichentabelle eine Rolle spielt.
+func testReceipt(id string) []byte {
+	var b bytes.Buffer
+	b.WriteString("\x1b@")                                       // ESC @: zurücksetzen
+	b.WriteString("\x1bE\x01ERPNext Hardware Bridge\n\x1bE\x00") // fett an/aus
+	b.WriteString("Testdruck: " + id + "\n")
+	b.WriteString(time.Now().Format("02.01.2006 15:04:05") + "\n")
+	b.WriteString("\x1bd\x04")     // ESC d 4: vier Zeilen Vorschub
+	b.WriteString("\x1dV\x42\x00") // GS V B 0: Teilschnitt
+	return b.Bytes()
+}
+
 // testPDF ist die Testseite für Drucker, die PDF annehmen: eine A4-Seite mit
 // drei Zeilen Text in einer Standardschrift.
 func testPDF(id string) []byte {

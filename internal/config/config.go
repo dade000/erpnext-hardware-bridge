@@ -63,9 +63,11 @@ type DeviceConfig struct {
 	// gesetzt (z.B. iso_a6_105x148mm, fit). Leer = Vorgabe des Druckers.
 	Media        string `yaml:"media,omitempty" json:"media,omitempty"`
 	PrintScaling string `yaml:"print_scaling,omitempty" json:"print_scaling,omitempty"`
-	// Accept beschränkt einen ipp-Drucker auf ein Format ("pdf" oder "zpl").
-	// Ein CUPS-Server meldet für jede Warteschlange beides, auch wenn dahinter
-	// ein Bürodrucker steht, der mit Rohdaten nichts anfangen kann.
+	// Accept beschränkt einen ipp-Drucker auf ein Format ("pdf", "zpl" oder
+	// "escpos"). Ein CUPS-Server meldet für jede Warteschlange beides, auch wenn
+	// dahinter ein Bürodrucker steht, der mit Rohdaten nichts anfangen kann.
+	// Bei Rohdruckern (raw_tcp, raw_file, system) sagt accept, welche Sprache
+	// der Drucker spricht: "zpl" (Etiketten, Vorgabe) oder "escpos" (Bons).
 	Accept string `yaml:"accept,omitempty" json:"accept,omitempty"`
 	// Default: Standarddrucker dieses Arbeitsplatzes für Aufträge ohne
 	// Geräteangabe (Schnelldruck im Desk).
@@ -241,6 +243,9 @@ func (c *Config) Validate() error {
 			}
 		}
 		if d.Kind == "printer" {
+			if d.Driver != "ipp" && d.Accept != "" && d.Accept != "zpl" && d.Accept != "escpos" {
+				errs = append(errs, fmt.Errorf("%s: accept %q geht bei Rohdruckern nicht (zpl oder escpos)", where, d.Accept))
+			}
 			switch d.Driver {
 			case "raw_tcp":
 				if host, port, err := net.SplitHostPort(d.Address); err != nil || host == "" {
@@ -261,8 +266,8 @@ func (c *Config) Validate() error {
 				if err != nil || u.Host == "" || (u.Scheme != "ipp" && u.Scheme != "ipps") {
 					errs = append(errs, fmt.Errorf("%s: uri %q ist keine ipp://- oder ipps://-Adresse", where, d.URI))
 				}
-				if d.Accept != "" && d.Accept != "pdf" && d.Accept != "zpl" {
-					errs = append(errs, fmt.Errorf("%s: accept %q unbekannt (pdf, zpl oder leer)", where, d.Accept))
+				if d.Accept != "" && d.Accept != "pdf" && d.Accept != "zpl" && d.Accept != "escpos" {
+					errs = append(errs, fmt.Errorf("%s: accept %q unbekannt (pdf, zpl, escpos oder leer)", where, d.Accept))
 				}
 				switch d.PrintScaling {
 				case "", "auto", "auto-fit", "fill", "fit", "none":

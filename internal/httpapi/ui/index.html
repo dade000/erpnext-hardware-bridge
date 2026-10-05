@@ -327,27 +327,35 @@ async function loadQueues() {
 }
 
 const PRINTER_DRIVERS = {
-  raw_tcp: "Netzwerkdrucker roh (Port 9100, ZPL)",
-  raw_file: "Gerätedatei roh (z.B. /dev/usb/lp0, ZPL)",
-  system: "Drucker des Betriebssystems (roh, ZPL)",
+  raw_tcp: "Netzwerkdrucker roh (Port 9100)",
+  raw_file: "Gerätedatei roh (z.B. /dev/usb/lp0)",
+  system: "Drucker des Betriebssystems (roh)",
   ipp: "IPP/IPPS-Drucker (PDF, auch CUPS-Server)",
 };
+
+// Rohdrucker: welche Sprache spricht der Drucker? Sehen kann die Bridge es nicht.
+function rawLanguage(d) {
+  return `<label>Druckersprache<select data-f="accept">
+          <option value="" ${d.accept !== "escpos" ? "selected" : ""}>Etiketten (ZPL)</option>
+          <option value="escpos" ${d.accept === "escpos" ? "selected" : ""}>Bons (ESC/POS)</option></select></label>`;
+}
 
 function printerFields(d, i) {
   switch (d.driver) {
     case "raw_tcp":
-      return `<label>Adresse<input data-f="address" value="${esc(d.address)}" placeholder="192.168.1.60:9100"></label>`;
+      return `<label>Adresse<input data-f="address" value="${esc(d.address)}" placeholder="192.168.1.60:9100"></label>${rawLanguage(d)}`;
     case "raw_file":
-      return `<label>Gerätedatei<input data-f="path" value="${esc(d.port && d.port.path)}" placeholder="/dev/usb/lp0"></label>`;
+      return `<label>Gerätedatei<input data-f="path" value="${esc(d.port && d.port.path)}" placeholder="/dev/usb/lp0"></label>${rawLanguage(d)}`;
     case "system":
       return `<label>Druckername<input data-f="queue" list="dq-${i}" value="${esc(d.queue)}" placeholder="Name im Betriebssystem">
-          <datalist id="dq-${i}">${queues.map((q) => `<option value="${esc(q)}">`).join("")}</datalist></label>`;
+          <datalist id="dq-${i}">${queues.map((q) => `<option value="${esc(q)}">`).join("")}</datalist></label>${rawLanguage(d)}`;
     case "ipp":
       return `<label style="grid-column:span 2">Adresse<input data-f="uri" value="${esc(d.uri)}" placeholder="ipps://drucker.lan/ipp/print"></label>
         <label>Verwendung<select data-f="accept">
           <option value="" ${!d.accept ? "selected" : ""}>wie vom Drucker gemeldet</option>
           <option value="pdf" ${d.accept === "pdf" ? "selected" : ""}>Dokumente (PDF)</option>
-          <option value="zpl" ${d.accept === "zpl" ? "selected" : ""}>Etiketten roh (ZPL)</option></select></label>
+          <option value="zpl" ${d.accept === "zpl" ? "selected" : ""}>Etiketten roh (ZPL)</option>
+          <option value="escpos" ${d.accept === "escpos" ? "selected" : ""}>Bons roh (ESC/POS)</option></select></label>
         <label>Papier (optional)<input data-f="media" value="${esc(d.media)}" placeholder="z.B. iso_a4_210x297mm"></label>
         <label>Skalierung (optional)<select data-f="print_scaling">${["", "auto", "auto-fit", "fit", "fill", "none"].map((x) => `<option value="${x}" ${x === (d.print_scaling || "") ? "selected" : ""}>${x || "Vorgabe des Druckers"}</option>`).join("")}</select></label>
         <label class="check"><input type="checkbox" data-f="insecure_tls" ${d.insecure_tls ? "checked" : ""}>Zertifikat nicht prüfen (ipps, selbstsigniert)</label>`;
@@ -358,7 +366,7 @@ function printerFields(d, i) {
 function printerNote(d) {
   return d.driver === "ipp"
     ? "Der Drucker bekommt das Dokument unverändert samt Formatangabe und rendert selbst. PDF geht nur an Drucker, die PDF melden; ein CUPS-Server meldet für jede Warteschlange PDF und Rohdaten, deshalb unter „Verwendung“ festlegen, wofür der Drucker dahinter taugt."
-    : "Der Drucker bekommt die Daten roh, also in seiner eigenen Sprache (ZPL). Die Bridge verändert ein Label nicht. Für „Drucker des Betriebssystems“ muss der Drucker dort eingerichtet sein; gedruckt wird am Treiber vorbei.";
+    : "Der Drucker bekommt die Daten roh, also in seiner eigenen Sprache: ZPL für Etikettendrucker, ESC/POS für Bondrucker. Welche es ist, kann die Bridge nicht sehen, deshalb unter „Druckersprache“ festlegen. Die Bridge verändert nichts. Für „Drucker des Betriebssystems“ muss der Drucker dort eingerichtet sein; gedruckt wird am Treiber vorbei.";
 }
 
 async function loadPorts() {
@@ -505,7 +513,7 @@ $("c-devices").addEventListener("click", async (ev) => {
   if (r.data.ok) {
     const x = r.data.result;
     out.innerHTML = d.kind === "printer"
-      ? `<div class="notice n-ok">${x.format === "pdf" ? "Testseite (PDF)" : "Testetikett (ZPL)"} gesendet (${x.bytes} Bytes). Kommt nichts aus dem Drucker, stimmt der Anschluss oder die Druckersprache nicht.</div>`
+      ? `<div class="notice n-ok">${x.format === "pdf" ? "Testseite (PDF)" : x.format === "escpos" ? "Testbon (ESC/POS)" : "Testetikett (ZPL)"} gesendet (${x.bytes} Bytes). Kommt nichts aus dem Drucker, stimmt der Anschluss oder die Druckersprache nicht.</div>`
       : d.kind === "terminal"
       ? `<div class="notice n-ok">Terminal ${esc(x.target)} antwortet (${x.ms} ms).</div>`
       : `<div class="notice n-ok">Antwort: <b>${x.kg.toFixed(3)} kg</b> (roh „${esc(x.raw)}“)</div>`;

@@ -261,3 +261,43 @@ func TestTestLabelIsOwnLabelNotACarrierLabel(t *testing.T) {
 		t.Fatalf("Testetikett: %q", sink.jobs)
 	}
 }
+
+// Ein Rohdrucker mit accept=escpos ist ein Bondrucker: er nimmt ESC/POS,
+// und ein Etikett (ZPL) oder eine Rechnung (PDF) kommt dort nicht an.
+func TestReceiptPrinterTakesOnlyEscPos(t *testing.T) {
+	cfg := config.DeviceConfig{ID: "bon", Kind: Kind, Driver: "raw_tcp", Accept: "escpos"}
+	sink := &fakeSink{}
+	p := NewWithSink(cfg, device.NewBus(), discardLog(), rawSink(cfg, sink))
+
+	if got := p.Status().Formats; len(got) != 1 || got[0] != "escpos" {
+		t.Fatalf("Formate %v, erwartet escpos", got)
+	}
+	bon := []byte("\x1b@Bon\n\x1dV\x42\x00")
+	if _, err := p.Handle(context.Background(), "print", printReq("ESC/POS", bon, "AR-1")); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(sink.jobs[0], bon) || sink.sent[0] != "escpos" {
+		t.Fatalf("Bon verändert: %q %v", sink.jobs[0], sink.sent)
+	}
+	for _, f := range []string{"zpl", "pdf"} {
+		_, err := p.Handle(context.Background(), "print", printReq(f, []byte("x"), "falsch"))
+		if err == nil || errCode(t, err) != "unsupported_format" {
+			t.Fatalf("%s am Bondrucker: %v", f, err)
+		}
+	}
+	// Der Testknopf schickt einen Testbon, kein Etikett.
+	if _, err := p.Handle(context.Background(), "read", nil); err != nil {
+		t.Fatal(err)
+	}
+	if last := sink.jobs[len(sink.jobs)-1]; !bytes.HasPrefix(last, []byte("\x1b@")) || sink.sent[len(sink.sent)-1] != "escpos" {
+		t.Fatalf("Testdruck ist kein Bon: %q", last)
+	}
+}
+
+// Ohne accept bleibt ein Rohdrucker ein Etikettendrucker wie bisher.
+func TestRawPrinterDefaultsToZPL(t *testing.T) {
+	cfg := config.DeviceConfig{ID: "labeldrucker", Kind: Kind, Driver: "raw_tcp"}
+	if got := rawSink(cfg, &tcpSink{}).Formats(); len(got) != 1 || got[0] != "zpl" {
+		t.Fatalf("Formate %v", got)
+	}
+}

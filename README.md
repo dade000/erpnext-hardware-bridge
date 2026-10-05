@@ -99,6 +99,11 @@ devices:
     address: 192.168.1.60:9100
     # port: /dev/usb/lp0          # raw_file: Gerätedatei
     # queue: Zebra_ZD421          # system: Drucker des Betriebssystems, roh
+  - id: bon
+    kind: printer
+    driver: raw_tcp               # Bondrucker im Netz
+    address: 192.168.1.70:9100
+    accept: escpos                # Rohdaten sind ESC/POS (Vorgabe: zpl)
   - id: buero
     kind: printer
     driver: ipp                   # IPP/IPPS-Drucker oder CUPS-Server

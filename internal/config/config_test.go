@@ -101,6 +101,24 @@ func TestValidatePrinters(t *testing.T) {
 	}
 }
 
+func TestValidateReceiptPrinters(t *testing.T) {
+	good := &Config{ListenPort: 8735, LogLevel: "info", Devices: []DeviceConfig{
+		{ID: "bon", Kind: "printer", Driver: "raw_tcp", Address: "192.168.1.70:9100", Accept: "escpos"},
+		{ID: "bon2", Kind: "printer", Driver: "ipp", URI: "ipp://cups.lan/printers/BON", Accept: "escpos"},
+	}}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("Bondrucker abgelehnt: %v", err)
+	}
+	bad := &Config{ListenPort: 8735, LogLevel: "info", Devices: []DeviceConfig{
+		{ID: "a", Kind: "printer", Driver: "raw_tcp", Address: "192.168.1.70:9100", Accept: "pdf"},
+		{ID: "b", Kind: "printer", Driver: "ipp", URI: "ipp://cups.lan/p", Accept: "postscript"},
+	}}
+	err := bad.Validate()
+	if err == nil || !strings.Contains(err.Error(), "geht bei Rohdruckern nicht") || !strings.Contains(err.Error(), "postscript") {
+		t.Fatalf("erwartet Fehler zu accept: %v", err)
+	}
+}
+
 func TestValidateTerminalForwards(t *testing.T) {
 	good := &Config{ListenPort: 8735, LogLevel: "info", Devices: []DeviceConfig{
 		{ID: "terminal", Kind: "terminal", Driver: "ws_forward", Address: "192.168.1.50:80", LocalPort: 8736},

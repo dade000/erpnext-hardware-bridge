@@ -112,7 +112,12 @@ func (s *ippSink) Check(ctx context.Context) error {
 		case mimePDF:
 			name = "pdf"
 		case mimeRaw:
+			// Rohdaten: Etikettendrucker (ZPL) oder Bondrucker (ESC/POS),
+			// sehen kann man es nicht; accept entscheidet.
 			name = "zpl"
+			if s.accept == "escpos" {
+				name = "escpos"
+			}
 		}
 		if name != "" && (s.accept == "" || s.accept == name) {
 			formats = append(formats, name)

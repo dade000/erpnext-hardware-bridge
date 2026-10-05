@@ -803,3 +803,22 @@ Bridge zu einem nachgebauten Terminal (Handshake mit Subprotokoll `SIXml`,
 erste SIXml-Nachricht kommt an); eine fremde Seite wird abgewiesen. Nicht
 geprüft: ein echtes Worldline-Terminal.
 
+## 20. Bondrucker: ESC/POS (2026-10-05)
+
+Die Kasse druckt Bon, Terminal-Beleg, A4-Rechnung und Kassenabschluss nicht
+mehr über CUPS am Server, sondern über die Bridge am Kassen-PC. Dafür kennt
+das Druckmodul eine dritte Sprache neben ZPL und PDF: **ESC/POS**.
+
+Rohdaten sind Rohdaten – ob hinter Port 9100, einer Gerätedatei oder einer
+Roh-Warteschlange ein Etikettendrucker oder ein Bondrucker steht, sieht die
+Bridge nicht. Das sagt `accept` am Drucker: `zpl` (Vorgabe, wie bisher) oder
+`escpos`; bei IPP zusätzlich `pdf`. Ein Bondrucker nimmt dann nur ESC/POS an,
+ein Etikett oder eine Rechnung landet dort nicht. Der Testknopf schickt einen
+kurzen Testbon (ASCII, Schnitt am Ende).
+
+Welche Drucker die Kasse benutzt, steht – abweichend von Abschnitt 9 – im
+POS Profile als Geräte-ID der Bridge (Entscheidung des Benutzers). Gerendert
+wird weiter am Server (ESC/POS-Rasterbild bzw. PDF); die Kasse holt die Bytes
+und reicht sie mit `printer.print` an die Bridge. Ohne Bridge oder Drucker
+druckt die Kasse nicht und sagt, was fehlt.
+
