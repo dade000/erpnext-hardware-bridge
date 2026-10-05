@@ -17,6 +17,7 @@ package terminal
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -167,7 +168,17 @@ func (f *Forward) handle(ctx context.Context, c net.Conn, conns *sync.Map) {
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(handshakeTimeout))
 	br := bufio.NewReader(c)
-	req, err := http.ReadRequest(br)
+	raw, err := readHead(br)
+	if err != nil && len(raw) == 0 {
+		// Firefox öffnet vor jedem Versuch eine Verbindung auf Vorrat und
+		// schliesst sie leer wieder. Das ist keine Absage wert.
+		f.log.Debug("Leere Verbindung ohne Handshake", "remote", c.RemoteAddr().String())
+		return
+	}
+	var req *http.Request
+	if err == nil {
+		req, err = http.ReadRequest(bufio.NewReader(bytes.NewReader(raw)))
+	}
 	if err != nil {
 		f.refuse(c, http.StatusBadRequest, "kein HTTP-Handshake", err)
 		return
@@ -201,8 +212,12 @@ func (f *Forward) handle(ctx context.Context, c net.Conn, conns *sync.Map) {
 		return
 	}
 
-	// Den Handshake unverändert weitergeben, nur Host zeigt aufs Terminal.
-	if err := writeHandshake(t, req, f.cfg.Address); err != nil {
+	// Den Handshake byte-genau weitergeben, nur Host zeigt aufs Terminal.
+	// Nicht über http.Header: der schreibt Namen in kanonischer Form
+	// (Sec-Websocket-Protocol), und das Terminal vergleicht offenbar exakt --
+	// es bestätigte das Subprotokoll SIXml dann nicht, und der Browser brach
+	// die Verbindung sofort ab.
+	if _, err := t.Write(replaceHost(raw, f.cfg.Address)); err != nil {
 		f.fail(err)
 		f.refuse(c, http.StatusBadGateway, "Terminal nicht erreichbar", err)
 		return
@@ -231,6 +246,12 @@ func (f *Forward) handle(ctx context.Context, c net.Conn, conns *sync.Map) {
 	_ = c.SetDeadline(time.Time{})
 	_ = t.SetReadDeadline(time.Time{})
 
+	if want := req.Header.Get("Sec-WebSocket-Protocol"); want != "" && proto == "" {
+		// Der Browser verwirft die Verbindung dann sofort.
+		f.log.Warn("Terminal bestätigt das Subprotokoll nicht", "angefragt", want, "target", f.cfg.Address)
+	}
+	f.log.Debug("Antwort des Terminals", "kopf", headerNames(head))
+
 	f.begin()
 	f.log.Info("Kasse mit Terminal verbunden", "origin", origin, "target", f.cfg.Address, "protokoll", proto)
 	start := time.Now()
@@ -239,15 +260,47 @@ func (f *Forward) handle(ctx context.Context, c net.Conn, conns *sync.Map) {
 	f.log.Info("Verbindung zum Terminal beendet", "dauer", time.Since(start).Round(time.Second).String())
 }
 
-func writeHandshake(w io.Writer, req *http.Request, host string) error {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s %s HTTP/1.1\r\nHost: %s\r\n", req.Method, req.RequestURI, host)
-	if err := req.Header.Write(&b); err != nil {
-		return err
+// readHead liest den Kopf einer Anfrage bis zur Leerzeile, roh.
+func readHead(r *bufio.Reader) ([]byte, error) {
+	var head []byte
+	for {
+		line, err := r.ReadSlice('\n')
+		head = append(head, line...)
+		if err != nil {
+			return head, err
+		}
+		if len(line) <= 2 && strings.TrimRight(string(line), "\r\n") == "" {
+			return head, nil
+		}
+		if len(head) > 16<<10 {
+			return head, errors.New("Kopf zu lang")
+		}
 	}
-	b.WriteString("\r\n")
-	_, err := io.WriteString(w, b.String())
-	return err
+}
+
+// replaceHost ersetzt die Host-Zeile und lässt alle anderen Bytes, wie sie
+// sind -- auch Gross-/Kleinschreibung und Reihenfolge der Kopfzeilen.
+func replaceHost(head []byte, host string) []byte {
+	lines := strings.SplitAfter(string(head), "\n")
+	for i, l := range lines {
+		if i > 0 && len(l) >= 5 && strings.EqualFold(l[:5], "host:") {
+			lines[i] = "Host: " + host + "\r\n"
+			break
+		}
+	}
+	return []byte(strings.Join(lines, ""))
+}
+
+// headerNames listet die Namen der Kopfzeilen einer Antwort (ohne Werte),
+// fürs Debug-Log.
+func headerNames(head []byte) string {
+	var names []string
+	for i, l := range strings.Split(string(head), "\r\n") {
+		if n, _, ok := strings.Cut(l, ":"); ok && i > 0 {
+			names = append(names, n)
+		}
+	}
+	return strings.Join(names, ", ")
 }
 
 // readResponseHead liest die Antwort des Terminals bis zur Leerzeile und

@@ -215,3 +215,52 @@ func TestTerminalRejectsHandshake(t *testing.T) {
 		t.Fatalf("Status %+v", st)
 	}
 }
+
+// Das Terminal soll den Handshake so sehen, wie der Browser ihn geschickt
+// hat: Schreibweise und Reihenfolge der Kopfzeilen unverändert, nur Host neu.
+func TestHandshakeIsForwardedByteExact(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	got := make(chan string, 1)
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		head, _ := readHead(bufio.NewReader(c))
+		got <- string(head)
+		io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Protocol: SIXml\r\n\r\n")
+	}()
+	_, port, _ := start(t, l.Addr().String())
+
+	_, _, status := handshake(t, port, "127.0.0.1:"+itoa(port), origin)
+	if !strings.Contains(status, "101") {
+		t.Fatalf("Handshake: %q", status)
+	}
+	want := "GET /SIXml HTTP/1.1\r\nHost: 192.168.1.50:80\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: SIXml\r\n" +
+		"Origin: " + origin + "\r\n\r\n"
+	if h := <-got; h != want {
+		t.Fatalf("beim Terminal angekommen:\n%q\nerwartet:\n%q", h, want)
+	}
+}
+
+// Firefox öffnet vor dem eigentlichen Versuch eine leere Verbindung.
+func TestEmptyConnectionIsNoRefusal(t *testing.T) {
+	target, _ := fakeTerminal(t)
+	f, port, _ := start(t, target)
+
+	c, err := net.Dial("tcp", "127.0.0.1:"+itoa(port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	time.Sleep(100 * time.Millisecond)
+	if n := f.Status().Stats.(map[string]any)["refused"]; n != 0 {
+		t.Fatalf("leere Verbindung als Absage gezählt: %v", n)
+	}
+}
