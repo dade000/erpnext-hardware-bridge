@@ -218,16 +218,18 @@ func (f *Forward) handle(ctx context.Context, c net.Conn, conns *sync.Map) {
 		f.refuse(c, http.StatusBadGateway, "Terminal antwortet nicht", err)
 		return
 	}
-	if _, err := c.Write(head); err != nil {
+	// Erst Status und Log, dann die Antwort an die Kasse: sonst sähe, wer
+	// gleich danach nachfragt, noch den alten Zustand.
+	accepted := strings.Contains(status, " 101 ")
+	if !accepted {
+		f.log.Warn("Terminal nimmt den WebSocket nicht an", "antwort", status, "target", f.cfg.Address, "pfad", req.RequestURI)
+		f.fail(fmt.Errorf("Terminal antwortet %q", status))
+	}
+	if _, err := c.Write(head); err != nil || !accepted {
 		return
 	}
 	_ = c.SetDeadline(time.Time{})
 	_ = t.SetReadDeadline(time.Time{})
-	if !strings.Contains(status, " 101 ") {
-		f.log.Warn("Terminal nimmt den WebSocket nicht an", "antwort", status, "target", f.cfg.Address, "pfad", req.RequestURI)
-		f.fail(fmt.Errorf("Terminal antwortet %q", status))
-		return
-	}
 
 	f.begin()
 	f.log.Info("Kasse mit Terminal verbunden", "origin", origin, "target", f.cfg.Address, "protokoll", proto)
