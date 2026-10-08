@@ -60,7 +60,8 @@ type DeviceConfig struct {
 	// selbstsigniertem Zertifikat, wie bei Druckern üblich).
 	InsecureTLS bool `yaml:"insecure_tls,omitempty" json:"insecure_tls,omitempty"`
 	// Media und PrintScaling gehen als IPP-Auftragsattribute mit, wenn
-	// gesetzt (z.B. iso_a6_105x148mm, fit). Leer = Vorgabe des Druckers.
+	// gesetzt (z.B. iso_a6_105x148mm, fit), bei system/pdf als lp-Optionen.
+	// Leer = Vorgabe des Druckers.
 	Media        string `yaml:"media,omitempty" json:"media,omitempty"`
 	PrintScaling string `yaml:"print_scaling,omitempty" json:"print_scaling,omitempty"`
 	// Accept beschränkt einen ipp-Drucker auf ein Format ("pdf", "zpl" oder
@@ -68,6 +69,8 @@ type DeviceConfig struct {
 	// dahinter ein Bürodrucker steht, der mit Rohdaten nichts anfangen kann.
 	// Bei Rohdruckern (raw_tcp, raw_file, system) sagt accept, welche Sprache
 	// der Drucker spricht: "zpl" (Etiketten, Vorgabe) oder "escpos" (Bons).
+	// Bei system unter Linux/macOS heißt "pdf": PDF durch den Treiber der
+	// CUPS-Warteschlange drucken statt roh.
 	Accept string `yaml:"accept,omitempty" json:"accept,omitempty"`
 	// Default: Standarddrucker dieses Arbeitsplatzes für Aufträge ohne
 	// Geräteangabe (Schnelldruck im Desk).
@@ -243,7 +246,8 @@ func (c *Config) Validate() error {
 			}
 		}
 		if d.Kind == "printer" {
-			if d.Driver != "ipp" && d.Accept != "" && d.Accept != "zpl" && d.Accept != "escpos" {
+			if d.Driver != "ipp" && d.Accept != "" && d.Accept != "zpl" && d.Accept != "escpos" &&
+				!(d.Driver == "system" && d.Accept == "pdf" && runtime.GOOS != "windows") {
 				errs = append(errs, fmt.Errorf("%s: accept %q geht bei Rohdruckern nicht (zpl oder escpos)", where, d.Accept))
 			}
 			switch d.Driver {
@@ -261,6 +265,10 @@ func (c *Config) Validate() error {
 				if strings.TrimSpace(d.Queue) == "" {
 					errs = append(errs, fmt.Errorf("%s: queue fehlt (Name des Druckers im Betriebssystem)", where))
 				}
+				if d.Accept == "pdf" && runtime.GOOS == "windows" {
+					errs = append(errs, fmt.Errorf("%s: PDF über einen Windows-Drucker geht nicht, nur roh (zpl oder escpos); für PDF den Drucker per ipp ansprechen", where))
+				}
+				errs = append(errs, checkPrintScaling(where, d.PrintScaling)...)
 			case "ipp":
 				u, err := url.Parse(d.URI)
 				if err != nil || u.Host == "" || (u.Scheme != "ipp" && u.Scheme != "ipps") {
@@ -269,11 +277,7 @@ func (c *Config) Validate() error {
 				if d.Accept != "" && d.Accept != "pdf" && d.Accept != "zpl" && d.Accept != "escpos" {
 					errs = append(errs, fmt.Errorf("%s: accept %q unbekannt (pdf, zpl, escpos oder leer)", where, d.Accept))
 				}
-				switch d.PrintScaling {
-				case "", "auto", "auto-fit", "fill", "fit", "none":
-				default:
-					errs = append(errs, fmt.Errorf("%s: print_scaling %q unbekannt (auto, auto-fit, fill, fit, none)", where, d.PrintScaling))
-				}
+				errs = append(errs, checkPrintScaling(where, d.PrintScaling)...)
 			}
 		}
 		if d.Kind == "terminal" && d.Driver == "ws_forward" {
@@ -458,4 +462,12 @@ func hostname() string {
 		return "station"
 	}
 	return h
+}
+
+func checkPrintScaling(where, v string) []error {
+	switch v {
+	case "", "auto", "auto-fit", "fill", "fit", "none":
+		return nil
+	}
+	return []error{fmt.Errorf("%s: print_scaling %q unbekannt (auto, auto-fit, fill, fit, none)", where, v)}
 }

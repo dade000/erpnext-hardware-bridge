@@ -329,7 +329,7 @@ async function loadQueues() {
 const PRINTER_DRIVERS = {
   raw_tcp: "Netzwerkdrucker roh (Port 9100)",
   raw_file: "Gerätedatei roh (z.B. /dev/usb/lp0)",
-  system: "Drucker des Betriebssystems (roh)",
+  system: "Drucker des Betriebssystems (roh, unter Linux auch PDF)",
   ipp: "IPP/IPPS-Drucker (PDF, auch CUPS-Server)",
 };
 
@@ -348,7 +348,13 @@ function printerFields(d, i) {
       return `<label>Gerätedatei<input data-f="path" value="${esc(d.port && d.port.path)}" placeholder="/dev/usb/lp0"></label>${rawLanguage(d)}`;
     case "system":
       return `<label>Druckername<input data-f="queue" list="dq-${i}" value="${esc(d.queue)}" placeholder="Name im Betriebssystem">
-          <datalist id="dq-${i}">${queues.map((q) => `<option value="${esc(q)}">`).join("")}</datalist></label>${rawLanguage(d)}`;
+          <datalist id="dq-${i}">${queues.map((q) => `<option value="${esc(q)}">`).join("")}</datalist></label>
+        <label>Verwendung<select data-f="accept">
+          <option value="" ${!d.accept || d.accept === "zpl" ? "selected" : ""}>Etiketten roh (ZPL)</option>
+          <option value="escpos" ${d.accept === "escpos" ? "selected" : ""}>Bons roh (ESC/POS)</option>
+          <option value="pdf" ${d.accept === "pdf" ? "selected" : ""}>Dokumente (PDF über den Treiber, nicht unter Windows)</option></select></label>
+        ${d.accept === "pdf" ? `<label>Papier (optional)<input data-f="media" value="${esc(d.media)}" placeholder="z.B. A4 oder iso_a4_210x297mm"></label>
+        <label>Skalierung (optional)<select data-f="print_scaling">${["", "auto", "auto-fit", "fit", "fill", "none"].map((x) => `<option value="${x}" ${x === (d.print_scaling || "") ? "selected" : ""}>${x || "Vorgabe des Druckers"}</option>`).join("")}</select></label>` : ""}`;
     case "ipp":
       return `<label style="grid-column:span 2">Adresse<input data-f="uri" value="${esc(d.uri)}" placeholder="ipps://drucker.lan/ipp/print"></label>
         <label>Verwendung<select data-f="accept">
@@ -364,6 +370,8 @@ function printerFields(d, i) {
 }
 
 function printerNote(d) {
+  if (d.driver === "system" && d.accept === "pdf")
+    return "Das PDF geht an die Warteschlange des Betriebssystems und läuft durch deren Treiber, wie ein Druck aus jedem anderen Programm. So lässt sich jeder Drucker teilen, der unter Linux eingerichtet ist, auch ohne eigene PDF-Fähigkeit. Unter Windows geht das nicht.";
   return d.driver === "ipp"
     ? "Der Drucker bekommt das Dokument unverändert samt Formatangabe und rendert selbst. PDF geht nur an Drucker, die PDF melden; ein CUPS-Server meldet für jede Warteschlange PDF und Rohdaten, deshalb unter „Verwendung“ festlegen, wofür der Drucker dahinter taugt."
     : "Der Drucker bekommt die Daten roh, also in seiner eigenen Sprache: ZPL für Etikettendrucker, ESC/POS für Bondrucker. Welche es ist, kann die Bridge nicht sehen, deshalb unter „Druckersprache“ festlegen. Die Bridge verändert nichts. Für „Drucker des Betriebssystems“ muss der Drucker dort eingerichtet sein; gedruckt wird am Treiber vorbei.";
@@ -481,7 +489,12 @@ function onDeviceEdit(ev) {
     case "queue": d.queue = v.trim(); return;
     case "uri": d.uri = v.trim(); return;
     case "media": d.media = v.trim(); return;
-    case "accept": case "print_scaling": d[f] = v; return;
+    case "accept":
+      d.accept = v;
+      // Beim Systemdrucker hängen Papier und Skalierung an PDF.
+      if (d.kind === "printer" && d.driver === "system" && ev.type === "change") renderDevices();
+      return;
+    case "print_scaling": d[f] = v; return;
     case "insecure_tls": case "default": d[f] = ev.target.checked; return;
     case "path": d.port = { path: v.trim() }; return;
     case "portmode":

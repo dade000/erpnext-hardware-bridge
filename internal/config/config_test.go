@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -116,6 +117,26 @@ func TestValidateReceiptPrinters(t *testing.T) {
 	err := bad.Validate()
 	if err == nil || !strings.Contains(err.Error(), "geht bei Rohdruckern nicht") || !strings.Contains(err.Error(), "postscript") {
 		t.Fatalf("erwartet Fehler zu accept: %v", err)
+	}
+}
+
+func TestValidateSystemPDF(t *testing.T) {
+	c := &Config{ListenPort: 8735, LogLevel: "info", Devices: []DeviceConfig{
+		{ID: "a4", Kind: "printer", Driver: "system", Queue: "OKI", Accept: "pdf", Media: "A4", PrintScaling: "fit"},
+	}}
+	err := c.Validate()
+	if runtime.GOOS == "windows" {
+		if err == nil || !strings.Contains(err.Error(), "Windows") {
+			t.Fatalf("PDF am Windows-Drucker muss abgelehnt werden: %v", err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("PDF über CUPS-Warteschlange abgelehnt: %v", err)
+	}
+	c.Devices[0].PrintScaling = "klein"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "print_scaling") {
+		t.Fatalf("erwartet Fehler zu print_scaling: %v", err)
 	}
 }
 

@@ -9,15 +9,30 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"erpnext-hardware-bridge/internal/config"
 )
 
-// systemSink druckt roh über eine CUPS-Warteschlange des Stations-PCs.
+// systemSink druckt über eine CUPS-Warteschlange des Stations-PCs. Rohdaten
+// (ZPL, ESC/POS) gehen ungefiltert durch; ein PDF (accept: pdf) läuft durch
+// die Filter und den Treiber der Warteschlange, so wie aus jedem Programm.
 type systemSink struct {
-	rawOnly
-	queue string
+	queue        string
+	pdf          bool
+	media        string
+	printScaling string
 }
 
-func newSystemSink(queue string) Sink { return &systemSink{queue: queue} }
+func newSystemSink(cfg config.DeviceConfig) Sink {
+	return &systemSink{queue: cfg.Queue, pdf: cfg.Accept == "pdf", media: cfg.Media, printScaling: cfg.PrintScaling}
+}
+
+func (s *systemSink) Formats() []string {
+	if s.pdf {
+		return []string{"pdf"}
+	}
+	return []string{"zpl"}
+}
 
 func (s *systemSink) Target() string { return "Warteschlange " + s.queue }
 
@@ -36,14 +51,27 @@ func (s *systemSink) Check(ctx context.Context) error {
 }
 
 func (s *systemSink) Write(ctx context.Context, job Job) error {
-	title, data := job.Title, job.Data
-	// -o raw: CUPS reicht die Daten ungefiltert durch.
-	cmd := exec.CommandContext(ctx, "lp", "-d", s.queue, "-o", "raw", "-t", title)
-	cmd.Stdin = bytes.NewReader(data)
+	cmd := exec.CommandContext(ctx, "lp", s.args(job)...)
+	cmd.Stdin = bytes.NewReader(job.Data)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return errors.New(firstLine(out, err))
 	}
 	return nil
+}
+
+func (s *systemSink) args(job Job) []string {
+	args := []string{"-d", s.queue, "-t", job.Title}
+	if job.Format != "pdf" {
+		// -o raw: CUPS reicht die Daten ungefiltert durch.
+		return append(args, "-o", "raw")
+	}
+	if s.media != "" {
+		args = append(args, "-o", "media="+s.media)
+	}
+	if s.printScaling != "" {
+		args = append(args, "-o", "print-scaling="+s.printScaling)
+	}
+	return args
 }
 
 // ListQueues nennt die Druckwarteschlangen des Betriebssystems (für die

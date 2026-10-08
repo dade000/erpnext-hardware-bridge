@@ -641,7 +641,7 @@ Benutzer, statt umzuwandeln. Die Bridge lehnt jedes andere Format als
 |---|---|---|
 | `raw_tcp` | Netzwerkdrucker, Port 9100 | getestet gegen lokalen Listener |
 | `raw_file` | Gerätedatei, z.B. `/dev/usb/lp0` | getestet gegen Datei |
-| `system` | Druckwarteschlange des Betriebssystems, roh: CUPS (`lp -o raw`) bzw. Windows-Spooler (Datentyp `RAW`) | **nur kompiliert**, an keinem echten Drucker geprüft |
+| `system` | Druckwarteschlange des Betriebssystems, roh: CUPS (`lp -o raw`) bzw. Windows-Spooler (Datentyp `RAW`); unter CUPS mit `accept: pdf` auch PDF durch den Treiber (Abschnitt 21) | roh **nur kompiliert**, an keinem echten Drucker geprüft |
 
 Der Zustand (`device.state`) kommt aus einer Erreichbarkeitsprüfung alle
 15 s und nach jedem Auftrag: TCP-Verbindungsaufbau, Existenz der
@@ -822,3 +822,31 @@ wird weiter am Server (ESC/POS-Rasterbild bzw. PDF); die Kasse holt die Bytes
 und reicht sie mit `printer.print` an die Bridge. Ohne Bridge oder Drucker
 druckt die Kasse nicht und sagt, was fehlt.
 
+## 21. PDF über den Treiber einer CUPS-Warteschlange (2026-10-08)
+
+Anlass: Ein Linux-PC, der rund um die Uhr läuft, soll später die Drucker im
+Haus für ERPNext teilen und den CUPS-Server ersetzen. Dafür muss er auch
+Bürodrucker bedienen, die selbst kein PDF verstehen.
+
+`system` mit `accept: pdf` (nur Linux/macOS) schickt ein PDF **ohne**
+`-o raw` an die Warteschlange (`lp -d <queue> -t <titel>`). CUPS wandelt es
+mit Filtern und Treiber der Warteschlange um, wie bei einem Druck aus jedem
+anderen Programm. `media` und `print_scaling` gehen als `-o media=…` bzw.
+`-o print-scaling=…` mit. Rohdaten (ZPL, ESC/POS) laufen wie bisher mit
+`-o raw`. Ein Drucker hat weiter genau eine Verwendung; ZPL an einen
+PDF-Drucker lehnt die Bridge ab.
+
+Das weicht vom Grundsatz aus Abschnitt 16 ab („die Bridge wandelt nichts
+um“): umgewandelt wird nicht von der Bridge, sondern vom Treiber des
+Betriebssystems, den der Betreiber selbst eingerichtet hat.
+
+Windows: Der Spooler druckt PDF nicht ohne eigenes Rendern (PDFium,
+`Windows.Data.Pdf` oder ein Hilfsprogramm). Die Konfiguration lehnt
+`accept: pdf` bei `system` unter Windows deshalb ab; PDF dort über `ipp` an
+PDF-fähige Drucker.
+
+Getestet: Unit-Tests mit nachgebautem `lp` (Argumente, Daten), dazu ein
+echter Lauf in einem Container mit CUPS, Warteschlange mit PCL-Treiber
+(`generpcl.ppd`) und Datei als Ziel: PDF über die WS-API gedruckt, heraus
+kam PCL mit A4; ZPL an denselben Drucker abgelehnt. Nicht geprüft: echter
+Drucker.

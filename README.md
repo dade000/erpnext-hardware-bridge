@@ -20,7 +20,7 @@ Konzept und Entscheidungen: [docs/KONZEPT.md](docs/KONZEPT.md).
 | 2 | Kamera (libgphoto2, nur Linux) | offen – bis dahin reicht die Bridge `/shot` und `/health` an die Flask-App weiter |
 | 3 | Serieller Scanner | offen |
 | 3 | Zahlungsterminal: feste WebSocket-Weiterleitung `ws://127.0.0.1:<port>` → Terminal im LAN | gebaut; gegen ein nachgebautes Terminal mit der echten TIM-Bibliothek aus der Kasse getestet, an keinem echten Terminal |
-| 4 | Druckmodul: Labels roh (ZPL) und PDFs über IPP/IPPS auf Drucker der Station, Standarddrucker für den Schnelldruck im Desk | gebaut; Netzwerkdrucker, Gerätedatei und IPP gegen Attrappen getestet, IPP-Abfrage gegen einen echten CUPS-Server; Betriebssystem-Warteschlange (CUPS, Windows-Spooler) nur kompiliert, an keinem echten Drucker gedruckt |
+| 4 | Druckmodul: Labels roh (ZPL) und PDFs über IPP/IPPS auf Drucker der Station, Standarddrucker für den Schnelldruck im Desk | gebaut; Netzwerkdrucker, Gerätedatei und IPP gegen Attrappen getestet, IPP-Abfrage gegen einen echten CUPS-Server; PDF über eine CUPS-Warteschlange mit Treiber (`system`, `accept: pdf`) gegen echtes CUPS mit PCL-Treiber getestet; Rohdruck über CUPS/Windows-Spooler nur kompiliert, an keinem echten Drucker gedruckt |
 
 ## Schnellstart
 
@@ -99,6 +99,7 @@ devices:
     address: 192.168.1.60:9100
     # port: /dev/usb/lp0          # raw_file: Gerätedatei
     # queue: Zebra_ZD421          # system: Drucker des Betriebssystems, roh
+                                  #   (Linux/macOS: accept: pdf druckt PDF durch den Treiber)
   - id: bon
     kind: printer
     driver: raw_tcp               # Bondrucker im Netz

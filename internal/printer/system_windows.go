@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"syscall"
 	"unsafe"
+
+	"erpnext-hardware-bridge/internal/config"
 )
 
 // systemSink druckt roh über den Windows-Spooler (Datentyp RAW), also am
@@ -17,7 +19,9 @@ type systemSink struct {
 	queue string
 }
 
-func newSystemSink(queue string) Sink { return &systemSink{queue: queue} }
+// PDF über den Windows-Treiber geht (noch) nicht: dafür müsste die Bridge das
+// PDF selbst in Seiten rendern. Die Konfiguration lehnt accept: pdf ab.
+func newSystemSink(cfg config.DeviceConfig) Sink { return &systemSink{queue: cfg.Queue} }
 
 func (s *systemSink) Target() string { return "Drucker " + s.queue }
 

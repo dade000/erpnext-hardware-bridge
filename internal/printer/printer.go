@@ -11,7 +11,8 @@
 //
 //	raw_tcp   Netzwerkdrucker, Port 9100 (JetDirect/RAW)                  zpl oder escpos
 //	raw_file  Gerätedatei, z.B. /dev/usb/lp0                              zpl oder escpos
-//	system    Druckwarteschlange des Betriebssystems, roh                 zpl oder escpos
+//	system    Druckwarteschlange des Betriebssystems, roh                 zpl oder escpos,
+//	          oder PDF durch den Treiber der Warteschlange (nur CUPS)     oder pdf
 //	ipp       IPP/IPPS-Drucker oder CUPS-Server; Formate meldet der       pdf, zpl/escpos
 //	          Drucker selbst (PDF nur, wenn er es nativ annimmt)
 //
@@ -335,7 +336,7 @@ func Register(m *device.Manager) {
 		return NewWithSink(cfg, bus, log, rawSink(cfg, &fileSink{path: cfg.Port.Path}))
 	})
 	m.Register(Kind, "system", func(cfg config.DeviceConfig, bus *device.Bus, log *slog.Logger) device.Device {
-		return NewWithSink(cfg, bus, log, rawSink(cfg, newSystemSink(cfg.Queue)))
+		return NewWithSink(cfg, bus, log, rawSink(cfg, newSystemSink(cfg)))
 	})
 	m.Register(Kind, "ipp", func(cfg config.DeviceConfig, bus *device.Bus, log *slog.Logger) device.Device {
 		return NewWithSink(cfg, bus, log, newIPPSink(cfg))
