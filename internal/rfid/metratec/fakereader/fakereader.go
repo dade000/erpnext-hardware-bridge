@@ -35,7 +35,12 @@ type Reader struct {
 	invs   []string
 	cmds   []string
 	hw     string
+	// oldFirmware: AT+INVS nimmt für TID nur 0/1, keine Byte-Anzahl.
+	oldFirmware bool
 }
+
+// OldFirmware lässt AT+INVS mit TID-Byte-Anzahl scheitern.
+func (r *Reader) OldFirmware(v bool) { r.mu.Lock(); r.oldFirmware = v; r.mu.Unlock() }
 
 // New erzeugt einen Reader mit eingeschaltetem Echo (Werkszustand).
 func New() *Reader {
@@ -67,7 +72,7 @@ func (r *Reader) Open() *Port { return &Port{r: r} }
 func (r *Reader) visible() []*Tag {
 	var out []*Tag
 	for _, t := range r.tags {
-		if r.mask == "" || strings.EqualFold(t.TID, r.mask) {
+		if r.mask == "" || strings.HasPrefix(strings.ToUpper(t.TID), strings.ToUpper(r.mask)) {
 			out = append(out, t)
 		}
 	}
@@ -113,7 +118,11 @@ func (r *Reader) answer(cmd string) []byte {
 	case "AT+INVS?":
 		return ok("+INVS: " + strings.Join(r.invs, ","))
 	case "AT+INVS":
-		r.invs = strings.Split(arg, ",")
+		f := strings.Split(arg, ",")
+		if r.oldFirmware && f[2] != "0" && f[2] != "1" {
+			return fail("invalid parameter")
+		}
+		r.invs = f
 		return ok()
 	case "AT+PWR":
 		n, err := strconv.Atoi(arg)
@@ -141,8 +150,14 @@ func (r *Reader) answer(cmd string) []byte {
 		var lines []string
 		for _, t := range tags {
 			line := "+INV: " + t.EPC
-			if r.invs[2] == "1" {
-				line += "," + t.TID
+			// Wie die echte DeskID-Firmware: "1" liefert nur 8 Byte TID.
+			switch r.invs[2] {
+			case "0":
+			case "1":
+				line += "," + t.TID[:min(16, len(t.TID))]
+			default:
+				n, _ := strconv.Atoi(r.invs[2])
+				line += "," + t.TID[:min(2*n, len(t.TID))]
 			}
 			if r.invs[1] == "1" {
 				line += ",-52"
@@ -152,7 +167,7 @@ func (r *Reader) answer(cmd string) []byte {
 		return ok(append(lines, "+INV: <ROUND FINISHED, ANT=1>")...)
 	case "AT+READ":
 		f := strings.Split(arg, ",")
-		if len(f) < 3 || f[0] != "USR" {
+		if len(f) < 3 || (f[0] != "USR" && f[0] != "TID") {
 			return fail("unsupported read")
 		}
 		start, _ := strconv.Atoi(f[1])
@@ -160,6 +175,17 @@ func (r *Reader) answer(cmd string) []byte {
 		tags := r.visible()
 		if len(tags) == 0 {
 			return ok("+READ: <NO TAGS FOUND>")
+		}
+		if f[0] == "TID" {
+			var lines []string
+			for _, t := range tags {
+				if 2*(start+n) > len(t.TID) {
+					lines = append(lines, "+READ: "+t.EPC+",MEMORY OVERRUN")
+					continue
+				}
+				lines = append(lines, "+READ: "+t.EPC+",OK,"+strings.ToUpper(t.TID[2*start:2*(start+n)]))
+			}
+			return ok(lines...)
 		}
 		var lines []string
 		for _, t := range tags {

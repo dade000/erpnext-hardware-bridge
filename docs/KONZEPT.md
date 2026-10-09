@@ -897,3 +897,15 @@ Häppchen, Maske, Speicherüberlauf, Schreibfehler, abgezogenes Kabel, stummer
 Reader) und ein Lauf der echten Bridge gegen `testdata/fake_deskid_uhf.py` an
 einem PTY, angesteuert über `hwbridge.js` im Browser. Nicht geprüft: echter
 Reader, echter Tag, Handy.
+
+Nachtrag nach dem ersten Test mit echtem Reader (2026-10-09): Die DeskID-
+Firmware liefert die TID im Inventory mit der Vorgabe "1" nur mit 8 Byte
+(`E280B11720007801`); der EPC eines frischen EM4425 ist eine Kopie der vollen
+TID (`E280B117 20007801 144BF9A8`). 8 Byte sind nicht eindeutig. Die Bridge
+fordert deshalb 12 Byte an (`AT+INVS=…,12,…`), liest bei älterer Firmware per
+`AT+READ=TID,0,12` nach und beschreibt keinen Tag mit kürzerer TID
+(`no_tid`). Außerdem waren die ersten 64 Byte des UHF-Nutzerspeichers leer,
+obwohl ein Handy eine Adresse geschrieben hatte; »Testen« liest den
+Nutzerspeicher jetzt bis zu seinem Ende (höchstens 512 Byte) und meldet die
+lesbare Größe.
+

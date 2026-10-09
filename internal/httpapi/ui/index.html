@@ -559,13 +559,16 @@ function rfidTestResult(x) {
   let h = `<div class="notice n-ok">${tags.length} Tag${tags.length > 1 ? "s" : ""} im Feld:<br>` +
     tags.map((t) => `TID <code>${esc(t.tid || "?")}</code> · EPC <code>${esc(t.epc)}</code> · ${t.rssi} dBm`).join("<br>") + "</div>";
   if (tags.length > 1) return h + '<p class="muted small">Für den Speicherauszug nur einen Tag auflegen.</p>';
+  if (x.tid_error) h += `<div class="notice n-err">${esc(x.tid_error)}</div>`;
   if (x.usr_error) return h + `<div class="notice n-err">Nutzerspeicher nicht lesbar: ${esc(x.usr_error)}</div>`;
   if (x.usr) {
-    const hexs = x.usr.match(/.{1,8}/g).map((w, k) => `<span title="Byte ${k * 4}">${w}</span>`).join(" ");
-    h += `<div class="small">Nutzerspeicher ab Byte 0: <code style="word-break:break-all">${hexs}</code></div>`;
+    const rows = x.usr.match(/.{1,64}/g).map((r, k) =>
+      `<span class="muted">${String(k * 32).padStart(3, " ")}:</span> ${r.match(/.{1,8}/g).join(" ")}`).join("\n");
+    h += `<div class="small">Nutzerspeicher (UHF), ${x.usr_bytes} Byte lesbar${x.usr_end ? ` – danach: ${esc(x.usr_end)}` : ""}:</div>`;
+    h += `<pre class="small" style="white-space:pre;overflow-x:auto;margin:4px 0">${rows}</pre>`;
     h += x.ndef
       ? `<div class="notice n-ok">Adresse gefunden ab Byte <b>${x.ndef.offset}</b>: ${esc(x.ndef.uri)}${x.ndef.read_only ? " (als schreibgeschützt gekennzeichnet)" : ""}</div>`
-      : `<p class="muted small">Keine Adresse im Speicher (${esc(x.ndef_error || "")}).</p>`;
+      : `<p class="muted small">Keine Adresse im lesbaren Speicher (${esc(x.ndef_error || "")}).</p>`;
   }
   return h;
 }

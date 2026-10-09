@@ -96,7 +96,7 @@ func TestSetup(t *testing.T) {
 	h := start(t, 3)
 	waitState(t, h.r, device.StateOnline)
 	cmds := h.fake.Commands()
-	if !slices.Contains(cmds, "AT+INVS=0,1,1,0,0,ALL,DUAL,-100") {
+	if !slices.Contains(cmds, "AT+INVS=0,1,12,0,0,ALL,DUAL,-100") {
 		t.Fatalf("Inventory-Einstellung fehlt: %v", cmds)
 	}
 	if h.fake.Power() != 3 {
@@ -294,4 +294,65 @@ func TestSilentReaderIsError(t *testing.T) {
 		t.Fatalf("stummer Reader: %v", err)
 	}
 	waitState(t, h.r, device.StateError)
+}
+
+func TestOldFirmwareReadsFullTIDAfterwards(t *testing.T) {
+	h := start(t, 0)
+	h.fake.OldFirmware(true)
+	waitState(t, h.r, device.StateOnline)
+	h.fake.Put(tagA())
+	// Das Inventory liefert nur 8 Byte; geschrieben wird mit der vollen TID.
+	inv, err := call(t, h.r, "inventory", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := inv["tags"].([]any)[0].(map[string]any)["tid"]; got != tidA[:16] {
+		t.Fatalf("Inventory-TID %v", got)
+	}
+	res, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["tid"] != tidA || res["uri"] != "https://holzschuhe.at/u/"+tidA {
+		t.Fatalf("Ergebnis %v", res)
+	}
+	dump, err := call(t, h.r, "read", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dump["tags"].([]any)[0].(map[string]any)["tid"]; got != tidA {
+		t.Fatalf("Auszug-TID %v", got)
+	}
+}
+
+func TestShortTIDIsRefused(t *testing.T) {
+	h := start(t, 0)
+	waitState(t, h.r, device.StateOnline)
+	tag := tagA()
+	tag.TID = "E2003412" // nur Klasse/Hersteller/Modell, keine Seriennummer
+	h.fake.Put(tag)
+	if _, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}"}); code(err) != "no_tid" {
+		t.Fatalf("kurze TID: %v", err)
+	}
+}
+
+func TestReadDumpWholeMemory(t *testing.T) {
+	h := start(t, 0)
+	waitState(t, h.r, device.StateOnline)
+	tag := tagA()
+	tag.USR = make([]byte, 136)
+	data, _ := metratec.EncodeType5URI("https://example.com/weit-hinten", false)
+	copy(tag.USR[72:], data)
+	h.fake.Put(tag)
+	res, err := call(t, h.r, "read", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["usr_bytes"] != float64(136) || res["usr_end"] == nil {
+		t.Fatalf("Größe/Ende: %v %v", res["usr_bytes"], res["usr_end"])
+	}
+	ndef, _ := res["ndef"].(map[string]any)
+	if ndef == nil || ndef["offset"] != float64(72) {
+		t.Fatalf("NDEF %v", res["ndef"])
+	}
 }

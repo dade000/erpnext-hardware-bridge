@@ -42,10 +42,14 @@ const (
 	// nicht im SDK; 16 Byte sind sicher klein und kosten nur ein paar
 	// Funkbefehle mehr.
 	writeChunk = 16
-	// dumpLen: so viel Nutzerspeicher liest der Test. Reicht für eine kurze
-	// Adresse samt Capability Container; ist der UHF-Nutzerspeicher kleiner,
-	// wird halbiert.
-	dumpLen = 64
+	// dumpLen: so viel Nutzerspeicher liest der Test je Befehl; am Ende des
+	// Speichers wird halbiert, bis nichts mehr geht.
+	dumpLen = 32
+	// dumpMax: weiter liest der Test nicht. Der EM4425 hat 2048 bit
+	// Gesamtspeicher; 512 Byte decken jede Aufteilung ab.
+	dumpMax = 512
+	// tidBytes: so lang ist eine eindeutige TID (96 bit, Gen2 mit XTID).
+	tidBytes = 12
 )
 
 // Stats zählt für die Statusseite.
@@ -247,12 +251,22 @@ func (r *Reader) setup(c *atConn) error {
 	if err != nil {
 		return err
 	}
-	set, err := invSettings(lines)
+	// TID mit 12 Byte anfordern: die Vorgabe der DeskID-Firmware liefert nur
+	// 8, und die ersten 8 Byte eines EM4425 (Klasse, Hersteller, Modell, Teil
+	// der Seriennummer) sind nicht eindeutig. Ältere Firmware kennt nur 0/1.
+	set, err := invSettings(lines, strconv.Itoa(tidBytes))
 	if err != nil {
 		return device.Errf("bad_response", err.Error())
 	}
 	if _, err := c.command(set, cmdTimeout); err != nil {
-		return err
+		if !isATError(err) {
+			return err
+		}
+		r.log.Info("TID-Länge im Inventory nicht einstellbar, lese sie bei Bedarf nach", "err", err)
+		set, _ = invSettings(lines, "1")
+		if _, err := c.command(set, cmdTimeout); err != nil {
+			return err
+		}
 	}
 	if r.cfg.PowerDBm > 0 {
 		if _, err := c.command("AT+PWR="+strconv.Itoa(r.cfg.PowerDBm), cmdTimeout); err != nil {
@@ -426,10 +440,48 @@ func (r *Reader) single(c *atConn) (Tag, error) {
 	default:
 		return Tag{}, device.Errf("multiple_tags", fmt.Sprintf("%d RFID-Tags am Reader – bitte nur das eine Paar auflegen.", len(tags)))
 	}
-	if tags[0].TID == "" {
+	tag := tags[0]
+	if tag.TID == "" {
 		return Tag{}, device.Errf("no_tid", "Die TID des Tags ließ sich nicht lesen – Tag näher an den Reader legen.")
 	}
-	return tags[0], nil
+	full, err := r.fullTID(c, tag.TID)
+	if err != nil {
+		return Tag{}, err
+	}
+	tag.TID = full
+	return tag, nil
+}
+
+// fullTID liest die TID auf volle 12 Byte nach, wenn das Inventory nur einen
+// Anfang geliefert hat. Ohne eindeutige TID wird nichts beschrieben: die
+// Adresse auf dem Tag und die Zuordnung zur Seriennummer hängen an ihr.
+func (r *Reader) fullTID(c *atConn, tid string) (string, error) {
+	if len(tid) >= 2*tidBytes {
+		return tid, nil
+	}
+	var full string
+	err := r.withMask(c, tid, func() error {
+		lines, err := c.command(fmt.Sprintf("AT+READ=TID,0,%d", tidBytes), writeTimeout)
+		if err != nil {
+			return err
+		}
+		res := parseTagResults(lines, "+READ: ")
+		if len(res) != 1 || res[0].Status != "OK" || !isHex(res[0].Data) {
+			return device.Errf("no_tid", fmt.Sprintf("Die TID ließ sich nicht vollständig lesen (%v).", res))
+		}
+		full = strings.ToUpper(res[0].Data)
+		return nil
+	})
+	if err != nil {
+		if isATError(err) {
+			err = device.Errf("no_tid", "Die TID ließ sich nicht vollständig lesen: "+err.Error())
+		}
+		return "", err
+	}
+	if len(full) < 2*tidBytes || !strings.HasPrefix(full, tid) {
+		return "", device.Errf("no_tid", "Die TID des Tags ist kürzer als 12 Byte und damit nicht eindeutig: "+full)
+	}
+	return full, nil
 }
 
 // withMask beschränkt alle folgenden Funkbefehle auf den Tag mit dieser TID
@@ -478,24 +530,58 @@ func (r *Reader) readDump(c *atConn) (any, error) {
 	if len(tags) != 1 || tags[0].TID == "" {
 		return out, nil
 	}
+	full, err := r.fullTID(c, tags[0].TID)
+	if fatal(err) {
+		return nil, err
+	}
+	if err != nil {
+		out["tid_error"] = err.Error()
+		full = tags[0].TID
+	} else {
+		tags[0].TID = full
+	}
+	// Stückweise lesen, bis der Speicher endet: wie groß der UHF-Nutzer-
+	// speicher ist, hängt von der Aufteilung des Chips ab und steht nirgends.
 	var mem []byte
-	err = r.withMask(c, tags[0].TID, func() error {
-		for n := dumpLen; n >= 4; n /= 2 {
-			mem, err = r.readUSR(c, 0, n)
-			if err == nil || fatal(err) {
-				return err
+	var endErr error
+	err = r.withMask(c, full, func() error {
+		for off := 0; off < dumpMax; {
+			n := dumpLen
+			var part []byte
+			var rerr error
+			for ; n >= 2; n /= 2 {
+				part, rerr = r.readUSR(c, off, n)
+				if rerr == nil || fatal(rerr) {
+					break
+				}
 			}
+			if fatal(rerr) {
+				return rerr
+			}
+			if rerr != nil {
+				endErr = rerr
+				return nil
+			}
+			mem = append(mem, part...)
+			off += n
 		}
-		return err
+		return nil
 	})
 	if fatal(err) {
 		return nil, err
 	}
 	if err != nil {
-		out["usr_error"] = err.Error()
-		return out, nil
+		endErr = err
 	}
 	out["usr"] = strings.ToUpper(hex.EncodeToString(mem))
+	out["usr_bytes"] = len(mem)
+	if endErr != nil {
+		if len(mem) == 0 {
+			out["usr_error"] = endErr.Error()
+			return out, nil
+		}
+		out["usr_end"] = endErr.Error()
+	}
 	if info, nerr := FindType5(mem); nerr == nil {
 		out["ndef"] = info
 	} else {

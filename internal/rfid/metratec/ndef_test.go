@@ -87,8 +87,8 @@ func TestParseInventory(t *testing.T) {
 }
 
 func TestInvSettingsKeepsTail(t *testing.T) {
-	got, err := invSettings([]string{"+INVS: 1,0,0,0,0,ALL,DUAL,-100"})
-	if err != nil || got != "AT+INVS=0,1,1,0,0,ALL,DUAL,-100" {
+	got, err := invSettings([]string{"+INVS: 1,0,0,0,0,ALL,DUAL,-100"}, "12")
+	if err != nil || got != "AT+INVS=0,1,12,0,0,ALL,DUAL,-100" {
 		t.Fatalf("%q %v", got, err)
 	}
 }

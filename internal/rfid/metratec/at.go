@@ -214,9 +214,10 @@ func parseInfo(lines []string) readerInfo {
 	return ri
 }
 
-// invSettings setzt in "+INVS: 0,1,0,0,…" die Felder ONT=0, RSSI=1, TID=1
-// und lässt den Rest (je nach Firmware unterschiedlich viele) stehen.
-func invSettings(lines []string) (string, error) {
+// invSettings setzt in "+INVS: 0,1,0,0,…" die Felder ONT=0, RSSI=1 und TID
+// (tid: "1" = Vorgabelänge der Firmware oder eine Byte-Anzahl wie "12") und
+// lässt den Rest (je nach Firmware unterschiedlich viele) stehen.
+func invSettings(lines []string, tid string) (string, error) {
 	for _, l := range lines {
 		rest, ok := strings.CutPrefix(l, "+INVS: ")
 		if !ok {
@@ -226,7 +227,7 @@ func invSettings(lines []string) (string, error) {
 		if len(f) < 3 {
 			break
 		}
-		f[0], f[1], f[2] = "0", "1", "1"
+		f[0], f[1], f[2] = "0", "1", tid
 		return "AT+INVS=" + strings.Join(f, ","), nil
 	}
 	return "", fmt.Errorf("unerwartete Antwort auf AT+INVS?: %q", lines)
