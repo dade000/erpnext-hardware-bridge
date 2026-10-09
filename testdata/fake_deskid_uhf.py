@@ -78,7 +78,9 @@ while True:
         elif name_ == "AT+READ":
             _, s, n = arg.split(",")
             s, n = int(s), int(n)
-            if arg.startswith("TID"):
+            if n > 32:  # wie der echte DeskID UHF v2
+                ok, out = False, ["+READ: <Read length too big>"]
+            elif arg.startswith("TID"):
                 out = [f"+READ: {EPC},OK,{TID[2 * s:2 * (s + n)]}"]
             else:
                 r = region(s, n)

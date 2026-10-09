@@ -47,6 +47,8 @@ const (
 	// dumpLen: so viel Nutzerspeicher liest der Test je Befehl; am Ende des
 	// Speichers wird halbiert, bis nichts mehr geht.
 	dumpLen = 32
+	// maxRead: mehr Byte nimmt der DeskID UHF v2 je AT+READ nicht an.
+	maxRead = 32
 	// dumpMax: weiter liest der Test nicht. Der EM4425 hat 2048 bit
 	// Gesamtspeicher; 512 Byte decken jede Aufteilung ab.
 	dumpMax = 256
@@ -542,6 +544,20 @@ func (r *Reader) readUSR(c *atConn, start, length int) ([]byte, error) {
 	return data, nil
 }
 
+// readUSRChunked liest length Byte in Stücken, die der Reader annimmt: der
+// DeskID UHF v2 lehnt mehr als 32 Byte je AT+READ mit "Read length too big" ab.
+func (r *Reader) readUSRChunked(c *atConn, start, length int) ([]byte, error) {
+	var out []byte
+	for off := 0; off < length; off += maxRead {
+		part, err := r.readUSR(c, start+off, min(maxRead, length-off))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, part...)
+	}
+	return out, nil
+}
+
 // readDump: Inventory und – bei genau einem Tag – die ersten Bytes des
 // Nutzerspeichers samt erkannter Adresse. Dient der Einrichtung: wer mit
 // einer Handy-App eine Adresse auf den Tag schreibt, sieht hier, an welchem
@@ -709,7 +725,7 @@ func (r *Reader) writeURI(c *atConn, p writeParams) (any, error) {
 				return device.Errf("write_failed", fmt.Sprintf("Schreiben bei Byte %d fehlgeschlagen: %s", p.Offset+i, res.Status))
 			}
 		}
-		back, err := r.readUSR(c, p.Offset, len(data))
+		back, err := r.readUSRChunked(c, p.Offset, len(data))
 		if err != nil {
 			return err
 		}
