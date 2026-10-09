@@ -47,8 +47,8 @@ const (
 	// dumpLen: so viel Nutzerspeicher liest der Test je Befehl; am Ende des
 	// Speichers wird halbiert, bis nichts mehr geht.
 	dumpLen = 32
-	// maxRead: mehr Byte nimmt der DeskID UHF v2 je AT+READ nicht an.
-	maxRead = 32
+	// readMaxStart: damit beginnt das Ausprobieren der Leselänge.
+	readMaxStart = 32
 	// dumpMax: weiter liest der Test nicht. Der EM4425 hat 2048 bit
 	// Gesamtspeicher; 512 Byte decken jede Aufteilung ab.
 	dumpMax = 256
@@ -106,6 +106,8 @@ type Reader struct {
 	stats   Stats
 	info    readerInfo
 	lastKey string
+	// readMax: größte Leselänge, die der Reader in dieser Sitzung annimmt.
+	readMax int
 }
 
 // New ist die Factory für den Manager.
@@ -299,6 +301,7 @@ func fatal(err error) bool {
 }
 
 func (r *Reader) session(ctx context.Context, c *atConn) error {
+	r.readMax = readMaxStart
 	if err := r.setup(c); err != nil {
 		if !fatal(err) {
 			r.st.Set(device.StateError, "Einrichtung fehlgeschlagen: "+err.Error())
@@ -544,18 +547,33 @@ func (r *Reader) readUSR(c *atConn, start, length int) ([]byte, error) {
 	return data, nil
 }
 
-// readUSRChunked liest length Byte in Stücken, die der Reader annimmt: der
-// DeskID UHF v2 lehnt mehr als 32 Byte je AT+READ mit "Read length too big" ab.
+// readUSRChunked liest length Byte in Stücken, die der Reader annimmt. Die
+// Grenze je AT+READ steht nirgends: der DeskID UHF v2 lehnt 32 Byte mit
+// "Read length too big" ab, 16 gehen. Sie wird deshalb ausprobiert (halbieren
+// bei genau diesem Fehler) und für die Sitzung gemerkt.
 func (r *Reader) readUSRChunked(c *atConn, start, length int) ([]byte, error) {
 	var out []byte
-	for off := 0; off < length; off += maxRead {
-		part, err := r.readUSR(c, start+off, min(maxRead, length-off))
+	for off := 0; off < length; {
+		n := min(r.readMax, length-off)
+		part, err := r.readUSR(c, start+off, n)
 		if err != nil {
+			if tooBig(err) && n > 2 {
+				r.readMax = max(2, n/2)
+				r.log.Info("Leselänge des Readers begrenzt", "bytes", r.readMax)
+				continue
+			}
 			return nil, err
 		}
 		out = append(out, part...)
+		off += n
 	}
 	return out, nil
+}
+
+// tooBig: der Reader lehnt die Leselänge ab.
+func tooBig(err error) bool {
+	var ae *atError
+	return errors.As(err, &ae) && strings.Contains(strings.ToLower(ae.msg), "too big")
 }
 
 // readDump: Inventory und – bei genau einem Tag – die ersten Bytes des

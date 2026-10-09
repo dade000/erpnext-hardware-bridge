@@ -199,7 +199,7 @@ func (r *Reader) answer(cmd string) []byte {
 		}
 		start, _ := strconv.Atoi(f[1])
 		n, _ := strconv.Atoi(f[2])
-		if n > 32 { // wie der echte DeskID UHF v2
+		if n > 16 { // wie der echte DeskID UHF v2: 32 Byte sind schon zu viel
 			return fail("Read length too big")
 		}
 		tags := r.visible()

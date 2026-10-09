@@ -930,6 +930,7 @@ den Tag werden deshalb bis zu dreimal wiederholt, wenn kein Tag antwortet.
 (2) Ein vorhandener Capability Container wird weiterverwendet (MLEN und
 Merkmalsbyte), nur die Zugriffsbits setzt die Bridge selbst.
 
-Vierter Test: `AT+READ` nimmt höchstens 32 Byte (`Read length too big`); das
-Zurücklesen nach dem Schreiben (52 Byte) läuft deshalb in 32-Byte-Stücken.
-
+Vierter/fünfter Test: `AT+READ` lehnt schon 32 Byte mit `Read length too big`
+ab (16 gehen; »Testen« hatte still halbiert und so 32 vorgetäuscht). Die
+Leselänge wird deshalb ausprobiert – 32, bei genau diesem Fehler halbieren –
+und für die Sitzung gemerkt.

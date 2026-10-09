@@ -78,7 +78,7 @@ while True:
         elif name_ == "AT+READ":
             _, s, n = arg.split(",")
             s, n = int(s), int(n)
-            if n > 32:  # wie der echte DeskID UHF v2
+            if n > 16:  # wie der echte DeskID UHF v2: 32 Byte sind schon zu viel
                 ok, out = False, ["+READ: <Read length too big>"]
             elif arg.startswith("TID"):
                 out = [f"+READ: {EPC},OK,{TID[2 * s:2 * (s + n)]}"]
