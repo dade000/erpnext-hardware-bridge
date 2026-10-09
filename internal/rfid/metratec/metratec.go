@@ -48,6 +48,8 @@ const (
 	// dumpLen: so viel Nutzerspeicher liest der Test je Befehl; am Ende des
 	// Speichers wird halbiert, bis nichts mehr geht.
 	dumpLen = 32
+	// writePowerDBm: Sendeleistung beim Schreiben (Maximum des DeskID UHF v2).
+	writePowerDBm = 9
 	// readMaxStart: damit beginnt das Ausprobieren der Leselänge.
 	readMaxStart = 32
 	// dumpMax: weiter liest der Test nicht. Der EM4425 hat 2048 bit
@@ -635,6 +637,52 @@ func (r *Reader) readUSRChunked(c *atConn, start, length int) ([]byte, error) {
 	return out, nil
 }
 
+// readBlocks liest Block für Block (writeChunk Byte).
+func (r *Reader) readBlocks(c *atConn, start, length int) ([]byte, error) {
+	var out []byte
+	for off := 0; off < length; off += writeChunk {
+		part, err := r.readUSR(c, start+off, min(writeChunk, length-off))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, part...)
+	}
+	return out, nil
+}
+
+// boostPower stellt für einen Schreibvorgang die volle Sendeleistung ein und
+// liefert die Funktion, die die vorherige wiederherstellt.
+func (r *Reader) boostPower(c *atConn) (func(), error) {
+	lines, err := c.command("AT+PWR?", cmdTimeout)
+	if err != nil {
+		if isATError(err) {
+			return func() {}, nil // Reader ohne Leistungsabfrage: so lassen
+		}
+		return nil, err
+	}
+	cur := ""
+	for _, l := range lines {
+		if v, ok := strings.CutPrefix(l, "+PWR: "); ok {
+			cur = strings.TrimSpace(v)
+		}
+	}
+	if cur == "" || cur == strconv.Itoa(writePowerDBm) {
+		return func() {}, nil
+	}
+	if _, err := c.command("AT+PWR="+strconv.Itoa(writePowerDBm), cmdTimeout); err != nil {
+		if isATError(err) {
+			r.log.Warn("Volle Sendeleistung zum Schreiben nicht einstellbar", "err", err)
+			return func() {}, nil
+		}
+		return nil, err
+	}
+	return func() {
+		if _, err := c.command("AT+PWR="+cur, cmdTimeout); err != nil {
+			r.log.Warn("Sendeleistung nach dem Schreiben nicht zurückgestellt", "power", cur, "err", err)
+		}
+	}, nil
+}
+
 // tooBig: der Reader lehnt die Leselänge ab.
 func tooBig(err error) bool {
 	var ae *atError
@@ -789,6 +837,15 @@ func (r *Reader) writeURI(c *atConn, p writeParams) (any, error) {
 	if err != nil {
 		return nil, device.Errf("bad_request", err.Error())
 	}
+	// Schreiben mit voller Leistung: mit 3 dBm blieben am echten EM4425 im
+	// NFC-Bereich die zwei untersten Bits im zweiten Byte jedes Worts auf 1
+	// stehen (EEPROM zu schwach programmiert), mit 9 dBm nicht. Erkennen und
+	// Lesen laufen weiter mit der eingestellten, niedrigen Leistung.
+	restore, err := r.boostPower(c)
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
 	err = r.withMask(c, tag.TID, func() error {
 		// Einen vorhandenen Capability Container weiterverwenden: er nennt die
 		// echte Größe des NFC-Bereichs (MLEN) und die Fähigkeiten des Chips.
@@ -808,7 +865,9 @@ func (r *Reader) writeURI(c *atConn, p writeParams) (any, error) {
 				return device.Errf("write_failed", fmt.Sprintf("Schreiben bei Byte %d fehlgeschlagen: %s", p.Offset+i, res.Status))
 			}
 		}
-		back, err := r.readUSRChunked(c, p.Offset, len(data))
+		// Blockweise zurücklesen: längere Lesebefehle bekamen im NFC-Bereich
+		// ERROR, wo einzelne Blöcke lesbar waren.
+		back, err := r.readBlocks(c, p.Offset, len(data))
 		if err != nil {
 			return err
 		}

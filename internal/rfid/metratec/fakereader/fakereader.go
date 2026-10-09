@@ -154,6 +154,8 @@ func (r *Reader) answer(cmd string) []byte {
 		}
 		r.invs = f
 		return ok()
+	case "AT+PWR?":
+		return ok("+PWR: " + strconv.Itoa(r.power))
 	case "AT+PWR":
 		n, err := strconv.Atoi(arg)
 		if err != nil || n < 0 || n > 9 {
@@ -277,6 +279,14 @@ func (r *Reader) answer(cmd string) []byte {
 					continue
 				}
 				copy(m[i:], data)
+				// Wie am echten EM4425: mit weniger als 9 dBm bleiben im
+				// NFC-Bereich die zwei untersten Bits im zweiten Byte jedes
+				// Worts auf 1 (zu schwach programmiert).
+				if t.HFBlocks && start >= t.HFStart && r.power > 0 && r.power < 9 {
+					for k := i + 1; k < i+len(data); k += 2 {
+						m[k] |= 0x03
+					}
+				}
 				if t.HFBlocks && t.HF != nil && start >= t.HFStart {
 					if t.bad == nil {
 						t.bad = map[int]bool{}

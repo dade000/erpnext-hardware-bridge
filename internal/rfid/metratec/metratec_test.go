@@ -132,9 +132,8 @@ func TestWriteURI(t *testing.T) {
 		t.Fatalf("Speicher: %+v %v", info, err)
 	}
 	// Maske wieder aus, damit das nächste Inventory alle Tags sieht.
-	cmds := h.fake.Commands()
-	if cmds[len(cmds)-1] != "AT+MSK=OFF" {
-		t.Fatalf("letzter Befehl %q, erwartet AT+MSK=OFF", cmds[len(cmds)-1])
+	if !maskClearedLast(h.fake.Commands()) {
+		t.Fatalf("Maske nach dem Schreiben nicht aufgehoben: %v", h.fake.Commands())
 	}
 }
 
@@ -172,9 +171,8 @@ func TestWriteFailureResetsMask(t *testing.T) {
 	if code(err) != "write_failed" || !strings.Contains(err.Error(), "ACCESS ERROR") {
 		t.Fatalf("Fehler %v", err)
 	}
-	cmds := h.fake.Commands()
-	if cmds[len(cmds)-1] != "AT+MSK=OFF" {
-		t.Fatalf("Maske nicht zurückgesetzt: %v", cmds[len(cmds)-3:])
+	if !maskClearedLast(h.fake.Commands()) {
+		t.Fatalf("Maske nicht zurückgesetzt: %v", h.fake.Commands())
 	}
 }
 
@@ -503,4 +501,43 @@ func TestOffsetMustBeBlockAligned(t *testing.T) {
 	if _, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}", "offset": 322}); code(err) != "bad_request" {
 		t.Fatalf("Offset 322: %v", err)
 	}
+}
+
+// Am echten EM4425 mit 3 dBm: im NFC-Bereich blieben Bits auf 1, das Handy sah
+// nichts. Geschrieben wird mit 9 dBm, danach gilt wieder die Einstellung.
+func TestWriteUsesFullPowerAndRestores(t *testing.T) {
+	h := start(t, 3)
+	waitState(t, h.r, device.StateOnline)
+	tag := tagA()
+	tag.USR = make([]byte, 32)
+	tag.HF, tag.HFStart, tag.HFBlocks = make([]byte, 184), 320, true
+	h.fake.Put(tag)
+	if _, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}", "offset": 320}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := metratec.DecodeType5(tag.HF)
+	if err != nil || info.URI != "https://holzschuhe.at/u/"+tidA {
+		t.Fatalf("NFC-Bereich: %+v %v", info, err)
+	}
+	if h.fake.Power() != 3 {
+		t.Fatalf("Leistung danach %d, erwartet 3", h.fake.Power())
+	}
+	cmds := strings.Join(h.fake.Commands(), "\n")
+	if !strings.Contains(cmds, "AT+PWR=9") {
+		t.Fatalf("nicht mit voller Leistung geschrieben: %s", cmds)
+	}
+}
+
+// maskClearedLast: nach dem letzten Setzen einer Maske kommt AT+MSK=OFF.
+func maskClearedLast(cmds []string) bool {
+	set, off := -1, -1
+	for i, c := range cmds {
+		switch {
+		case c == "AT+MSK=OFF":
+			off = i
+		case strings.HasPrefix(c, "AT+MSK="):
+			set = i
+		}
+	}
+	return set >= 0 && off > set
 }

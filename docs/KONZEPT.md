@@ -950,3 +950,12 @@ Die Bridge schreibt deshalb in 4-Byte-Blöcken, `offset` muss durch 4 teilbar
 sein; der DeskID meldet je geschriebenem Wort eine `+WRT`-Zeile, alle müssen
 OK sein. Der Simulator bildet das Blockverhalten nach (`HFBlocks`).
 
+Neunter Test: Auch in 4-Byte-Blöcken kamen mit 3 dBm Bits falsch zurück –
+immer die zwei untersten Bits im zweiten Byte jedes 16-Bit-Worts, immer von 0
+auf 1 (`E1430600`→`E1430603`, `032DD101`→`032FD103`). Das Muster eines
+zu schwach programmierten EEPROMs. Die erfolgreichen 4-Byte-Proben liefen mit
+9 dBm. Die Bridge schaltet deshalb nur zum Schreiben auf 9 dBm (`AT+PWR?`
+merken, danach zurückstellen) und liest zur Kontrolle blockweise; Erkennen
+und Lesen bleiben bei der eingestellten niedrigen Leistung. Der Simulator
+verfälscht unter 9 dBm genau diese Bits.
+
