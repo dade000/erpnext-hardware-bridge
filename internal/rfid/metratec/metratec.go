@@ -169,6 +169,22 @@ func (r *Reader) Handle(ctx context.Context, cmd string, params json.RawMessage)
 	default:
 		return nil, device.Errf("unknown_method", "rfid."+cmd+" gibt es nicht")
 	}
+	return r.enqueue(ctx, cmd, params)
+}
+
+// Raw schickt eine AT-Zeile unverändert an den Reader und liefert die
+// Antwortzeilen. Nur für die Konsole der Bridge-Oberfläche (Fehlersuche am
+// Arbeitsplatz) – über die WS-API ist das bewusst nicht erreichbar.
+func (r *Reader) Raw(ctx context.Context, line string) (any, error) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(strings.ToUpper(line), "AT") || strings.ContainsAny(line, "\r\n") || len(line) > 512 {
+		return nil, device.Errf("bad_request", "nur eine AT-Zeile (beginnt mit AT)")
+	}
+	raw, _ := json.Marshal(line)
+	return r.enqueue(ctx, "raw", raw)
+}
+
+func (r *Reader) enqueue(ctx context.Context, cmd string, params json.RawMessage) (any, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestDeadline)
 	defer cancel()
 	q := request{cmd: cmd, params: params, resp: make(chan result, 1)}
@@ -395,6 +411,20 @@ func timeoutOnly(err error) error {
 
 func (r *Reader) do(c *atConn, q request) (any, error) {
 	switch q.cmd {
+	case "raw":
+		var line string
+		_ = json.Unmarshal(q.params, &line)
+		r.log.Info("AT-Konsole", "cmd", line)
+		lines, err := c.command(line, writeTimeout)
+		var ae *atError
+		if errors.As(err, &ae) {
+			// ERROR ist hier eine Antwort, kein Fehler der Konsole.
+			return map[string]any{"cmd": line, "ok": false, "lines": append(ae.lines, "ERROR")}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"cmd": line, "ok": true, "lines": append(lines, "OK")}, nil
 	case "inventory":
 		tags, err := r.inventory(c)
 		if err != nil {

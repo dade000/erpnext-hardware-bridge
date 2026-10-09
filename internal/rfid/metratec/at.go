@@ -37,8 +37,9 @@ type atConn struct {
 
 // atError ist eine ERROR-Antwort des Readers.
 type atError struct {
-	cmd string
-	msg string
+	cmd   string
+	msg   string
+	lines []string // Antwortzeilen vor ERROR
 }
 
 func (e *atError) Error() string { return e.cmd + ": " + e.msg }
@@ -86,7 +87,7 @@ func (c *atConn) command(cmd string, timeout time.Duration) ([]string, error) {
 		case line == "OK":
 			return lines, nil
 		case line == "ERROR":
-			return nil, &atError{cmd: cmd, msg: errorText(lines, cmd)}
+			return nil, &atError{cmd: cmd, msg: errorText(lines, cmd), lines: lines}
 		}
 		lines = append(lines, line)
 	}

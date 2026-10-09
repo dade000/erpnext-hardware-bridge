@@ -471,6 +471,9 @@ function renderDevices() {
         <label>Baud<select data-f="baud">${[9600, 19200, 38400, 57600, 115200].map((b) => `<option ${b === d.baud ? "selected" : ""}>${b}</option>`).join("")}</select></label>
         <label>Abfrage alle (ms)<input data-f="poll_ms" type="number" min="100" max="10000" value="${d.poll_ms || 400}"></label>
         <label>Sendeleistung (dBm, 0 = Reader-Einstellung)<input data-f="power_dbm" type="number" min="0" max="9" value="${d.power_dbm || 0}"></label>
+        <div style="grid-column:1/-1"><label>AT-Konsole (Fehlersuche: eine Zeile an den Reader, z.B. <code>AT+READ=USR,320,2</code>)</label>
+          <div class="row"><input data-at="cmd" placeholder="AT+…" style="flex:1;font-family:monospace" spellcheck="false"><button class="btn" data-act="at">Senden</button></div>
+          <pre class="small" data-out="at" style="white-space:pre-wrap;margin:4px 0"></pre></div>
         <p class="muted small" style="grid-column:1/-1">metratec DeskID UHF v2: USB-C, 115200 Baud. Wenig Sendeleistung (z.B. 2–4 dBm) hält die Reichweite kurz, damit nur das aufgelegte Paar antwortet. »Testen« liest die Tags am Reader und, wenn genau einer aufliegt, die ersten Bytes seines Nutzerspeichers samt einer dort gefundenen Adresse – so lässt sich prüfen, wo der NFC-Bereich beginnt.</p>` : d.kind === "printer" ? `${printerFields(d, i)}
         <label class="check" style="grid-column:1/-1"><input type="checkbox" data-f="default" ${d.default ? "checked" : ""}>Standarddrucker dieses Arbeitsplatzes (für den Schnelldruck im ERPNext, je Format einer)</label>
         <p class="muted small" style="grid-column:1/-1">${printerNote(d)}</p>` : d.kind === "terminal" ? `
@@ -530,6 +533,18 @@ $("c-devices").addEventListener("click", async (ev) => {
   if (!btn) return;
   const card = btn.closest(".device");
   const d = cfg.devices[+card.dataset.i];
+  if (btn.dataset.act === "at") {
+    const input = card.querySelector('[data-at="cmd"]');
+    const pre = card.querySelector('[data-out="at"]');
+    const cmd = input.value.trim();
+    if (!cmd) return;
+    pre.textContent = `→ ${cmd}\n…\n` + pre.textContent;
+    const r = await api("POST", `/api/devices/${encodeURIComponent(d.id)}/at`, { cmd });
+    const text = r.data.ok ? r.data.result.lines.map((l) => "← " + l).join("\n")
+      : "Fehler: " + ((r.data.error || {}).message || "?");
+    pre.textContent = `→ ${cmd}\n${text}\n\n` + pre.textContent.replace(`→ ${cmd}\n…\n`, "");
+    return;
+  }
   if (btn.dataset.act === "remove") {
     cfg.devices.splice(+card.dataset.i, 1);
     renderDevices(); renderScaleSelect($("h-scale").value);

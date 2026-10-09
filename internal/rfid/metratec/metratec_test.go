@@ -470,3 +470,28 @@ func TestTagErrorStatusIsRetried(t *testing.T) {
 		t.Fatalf("dauerhafter Fehler: %v", err)
 	}
 }
+
+func TestRawConsole(t *testing.T) {
+	h := start(t, 0)
+	waitState(t, h.r, device.StateOnline)
+	h.fake.Put(tagA())
+	res, err := h.r.Raw(context.Background(), "AT+INV")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := res.(map[string]any)
+	lines := m["lines"].([]string)
+	if m["ok"] != true || !strings.HasPrefix(lines[0], "+INV: ") || lines[len(lines)-1] != "OK" {
+		t.Fatalf("%v", m)
+	}
+	res, err = h.r.Raw(context.Background(), "AT+NIX")
+	if err != nil || res.(map[string]any)["ok"] != false {
+		t.Fatalf("Fehlerantwort: %v %v", res, err)
+	}
+	if _, err := h.r.Raw(context.Background(), "rm -rf"); code(err) != "bad_request" {
+		t.Fatalf("keine AT-Zeile: %v", err)
+	}
+	if _, err := h.r.Handle(context.Background(), "raw", nil); code(err) != "unknown_method" {
+		t.Fatalf("raw über Handle: %v", err)
+	}
+}

@@ -184,6 +184,36 @@ func NewLoopback(rt Runtime, port int, log *slog.Logger) http.Handler {
 		writeJSON(w, 200, map[string]any{"ok": true, "restart_required": restart})
 	})
 
+	// AT-Konsole für RFID-Reader: eine Zeile an den Reader, Rohantwort zurück.
+	mux.HandleFunc("POST /api/devices/{id}/at", func(w http.ResponseWriter, r *http.Request) {
+		dev, ok := rt.Manager().Get(r.PathValue("id")).(interface {
+			Raw(ctx context.Context, line string) (any, error)
+		})
+		if !ok {
+			writeJSON(w, 404, map[string]any{"ok": false, "error": device.Errf("device_missing", "Kein Gerät mit AT-Konsole (erst speichern?)")})
+			return
+		}
+		var body struct {
+			Cmd string `json:"cmd"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+			writeJSON(w, 400, map[string]any{"ok": false, "error": device.Errf("bad_request", err.Error())})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		res, err := dev.Raw(ctx, body.Cmd)
+		if err != nil {
+			var de *device.Error
+			if !errors.As(err, &de) {
+				de = device.Errf("unexpected", err.Error())
+			}
+			writeJSON(w, 200, map[string]any{"ok": false, "error": de})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "result": res})
+	})
+
 	mux.HandleFunc("POST /api/devices/{id}/test", func(w http.ResponseWriter, r *http.Request) {
 		dev := rt.Manager().Get(r.PathValue("id"))
 		if dev == nil {
