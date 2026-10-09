@@ -79,14 +79,17 @@ type result struct {
 
 // Reader ist ein laufender Treiber.
 type Reader struct {
-	cfg     config.DeviceConfig
-	bus     *device.Bus
-	log     *slog.Logger
-	st      *device.StatusHolder
-	open    Opener
-	reqs    chan request
-	wake    chan struct{}
-	demand  atomic.Int32
+	cfg    config.DeviceConfig
+	bus    *device.Bus
+	log    *slog.Logger
+	st     *device.StatusHolder
+	open   Opener
+	reqs   chan request
+	wake   chan struct{}
+	demand atomic.Int32
+	// resend: nächstes Inventory auf jeden Fall als rfid.tags melden, auch
+	// ohne Änderung – ein neuer Zuhörer kennt den Stand sonst nicht.
+	resend  atomic.Bool
 	statsMu sync.Mutex
 	stats   Stats
 	info    readerInfo
@@ -133,6 +136,9 @@ func (r *Reader) bump(fn func(*Stats)) {
 // AddDemand zählt Zuhörer. Mit mindestens einem läuft im poll_ms-Takt ein
 // Inventory, damit die Fotostation sieht, ob (genau) ein Tag aufliegt.
 func (r *Reader) AddDemand(delta int) {
+	if delta > 0 {
+		r.resend.Store(true)
+	}
 	if n := r.demand.Add(int32(delta)); n > 0 && n-int32(delta) <= 0 {
 		select {
 		case r.wake <- struct{}{}:
@@ -400,7 +406,7 @@ func (r *Reader) inventory(c *atConn) ([]Tag, error) {
 	for _, t := range tags {
 		key += t.TID + "/" + t.EPC + ";"
 	}
-	if key != r.lastKey {
+	if key != r.lastKey || r.resend.Swap(false) {
 		r.lastKey = key
 		r.bus.Publish(device.Event{Name: "rfid.tags", Device: r.cfg.ID, Data: last})
 	}

@@ -254,6 +254,10 @@ func TestSubscribePublishesChanges(t *testing.T) {
 			}
 		}
 	}
+	// Neuer Zuhörer: erst der aktuelle Stand (leer), dann Änderungen.
+	if tags := next(); len(tags) != 0 {
+		t.Fatalf("Anfangsstand leer erwartet: %v", tags)
+	}
 	h.fake.Put(tagA())
 	if tags := next(); len(tags) != 1 {
 		t.Fatalf("ein Tag erwartet: %v", tags)
