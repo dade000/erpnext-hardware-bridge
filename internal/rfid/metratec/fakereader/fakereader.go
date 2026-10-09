@@ -41,7 +41,12 @@ type Reader struct {
 	hw     string
 	// oldFirmware: AT+INVS nimmt für TID nur 0/1, keine Byte-Anzahl.
 	oldFirmware bool
+	// miss: so viele der nächsten READ/WRT finden keinen Tag (Funkaussetzer).
+	miss int
 }
+
+// Miss lässt die nächsten n Lese-/Schreibbefehle ohne Tag antworten.
+func (r *Reader) Miss(n int) { r.mu.Lock(); r.miss = n; r.mu.Unlock() }
 
 // OldFirmware lässt AT+INVS mit TID-Byte-Anzahl scheitern.
 func (r *Reader) OldFirmware(v bool) { r.mu.Lock(); r.oldFirmware = v; r.mu.Unlock() }
@@ -180,6 +185,13 @@ func (r *Reader) answer(cmd string) []byte {
 			lines = append(lines, line)
 		}
 		return ok(append(lines, "+INV: <ROUND FINISHED, ANT=1>")...)
+	case "AT+READ", "AT+WRT":
+		if r.miss > 0 {
+			r.miss--
+			return ok("+" + strings.TrimPrefix(name, "AT+") + ": <NO TAGS FOUND>")
+		}
+	}
+	switch name {
 	case "AT+READ":
 		f := strings.Split(arg, ",")
 		if len(f) < 3 || (f[0] != "USR" && f[0] != "TID") {

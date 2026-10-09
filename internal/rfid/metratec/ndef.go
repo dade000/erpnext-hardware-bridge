@@ -196,3 +196,16 @@ func decodeURIRecord(msg []byte) (string, error) {
 	}
 	return prefix + string(pay[1:]), nil
 }
+
+// keepCC übernimmt aus einem vorhandenen Type-5-Capability-Container (4 Byte,
+// Version 1.x) Größe und Merkmale, wenn der Bereich groß genug ist. Die
+// Zugriffsbits (Schreibschutz-Kennzeichnung) bleiben die eigenen.
+func keepCC(data, cc []byte) {
+	if len(cc) < 4 || cc[0] != 0xE1 || cc[1]&0xF0 != 0x40 || cc[2] == 0 {
+		return
+	}
+	if int(cc[2]) < int(data[2]) {
+		return // vorhandener Bereich zu klein angegeben – eigene Angabe behalten
+	}
+	data[2], data[3] = cc[2], cc[3]
+}

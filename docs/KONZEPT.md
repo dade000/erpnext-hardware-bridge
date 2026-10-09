@@ -921,3 +921,12 @@ Startadresse kommt in die Photo Station Settings (»NFC-Bereich ab Byte«).
 Zählt der Reader tatsächlich in Worten, stimmt das stückweise Schreiben mit
 Byte-Schritten nicht – dann muss der Treiber nachgezogen werden.
 
+Dritter Test (2026-10-09): Der NFC-Bereich liegt tatsächlich ab Adresse 320
+(Byteadressierung bestätigt), 184 Byte, mit dem Capability Container der
+Handy-App `E1 40 17 09`. Zwei Folgerungen: (1) Die DeskID-Firmware nimmt die
+TID-Länge im Inventory nicht an; das Nachlesen per `AT+READ=TID` bekam einmal
+keine Antwort, obwohl der Tag mit -32 dBm auflag. Lese- und Schreibbefehle an
+den Tag werden deshalb bis zu dreimal wiederholt, wenn kein Tag antwortet.
+(2) Ein vorhandener Capability Container wird weiterverwendet (MLEN und
+Merkmalsbyte), nur die Zugriffsbits setzt die Bridge selbst.
+

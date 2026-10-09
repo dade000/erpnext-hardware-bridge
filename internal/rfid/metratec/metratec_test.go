@@ -402,3 +402,52 @@ func TestEM4425NFCAreaAtWordA0(t *testing.T) {
 		})
 	}
 }
+
+// Am echten Reader antwortete ein gut aufliegender Tag gelegentlich auf einen
+// einzelnen Lesebefehl nicht. Das darf weder das Nachlesen der TID noch das
+// Schreiben scheitern lassen.
+func TestRadioDropoutsAreRetried(t *testing.T) {
+	h := start(t, 0)
+	h.fake.OldFirmware(true)
+	waitState(t, h.r, device.StateOnline)
+	tag := tagA()
+	tag.USR = make([]byte, 32)
+	tag.HF, tag.HFStart = make([]byte, 184), 320
+	h.fake.Put(tag)
+
+	h.fake.Miss(2) // TID-Nachlesen
+	res, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}", "offset": 320})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["tid"] != tidA {
+		t.Fatalf("TID %v", res["tid"])
+	}
+
+	h.fake.Miss(3) // öfter als erlaubt
+	if _, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}", "offset": 320}); code(err) != "no_tag" {
+		t.Fatalf("dauerhaft kein Tag: %v", err)
+	}
+}
+
+// Ein vorhandener Capability Container (wie ihn eine Handy-App anlegt) nennt
+// die echte Größe des NFC-Bereichs; sie bleibt erhalten.
+func TestExistingCapabilityContainerIsKept(t *testing.T) {
+	h := start(t, 0)
+	waitState(t, h.r, device.StateOnline)
+	tag := tagA()
+	tag.USR = make([]byte, 32)
+	tag.HF, tag.HFStart = make([]byte, 184), 320
+	copy(tag.HF, []byte{0xE1, 0x40, 0x17, 0x09, 0x03, 0x12})
+	h.fake.Put(tag)
+	if _, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}", "offset": 320}); err != nil {
+		t.Fatal(err)
+	}
+	if tag.HF[0] != 0xE1 || tag.HF[1] != 0x43 || tag.HF[2] != 0x17 || tag.HF[3] != 0x09 {
+		t.Fatalf("CC % X", tag.HF[:4])
+	}
+	info, err := metratec.DecodeType5(tag.HF)
+	if err != nil || info.URI != "https://holzschuhe.at/u/"+tidA || !info.ReadOnly {
+		t.Fatalf("%+v %v", info, err)
+	}
+}

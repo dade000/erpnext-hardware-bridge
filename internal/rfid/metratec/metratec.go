@@ -467,15 +467,14 @@ func (r *Reader) fullTID(c *atConn, tid string) (string, error) {
 	}
 	var full string
 	err := r.withMask(c, tid, func() error {
-		lines, err := c.command(fmt.Sprintf("AT+READ=TID,0,%d", tidBytes), writeTimeout)
+		res, err := r.tagCommand(c, fmt.Sprintf("AT+READ=TID,0,%d", tidBytes), "+READ: ")
 		if err != nil {
 			return err
 		}
-		res := parseTagResults(lines, "+READ: ")
-		if len(res) != 1 || res[0].Status != "OK" || !isHex(res[0].Data) {
-			return device.Errf("no_tid", fmt.Sprintf("Die TID ließ sich nicht vollständig lesen (%v).", res))
+		if res.Status != "OK" || !isHex(res.Data) {
+			return device.Errf("no_tid", "Die TID ließ sich nicht vollständig lesen: "+res.Status)
 		}
-		full = strings.ToUpper(res[0].Data)
+		full = strings.ToUpper(res.Data)
 		return nil
 	})
 	if err != nil {
@@ -504,21 +503,41 @@ func (r *Reader) withMask(c *atConn, tid string, fn func() error) error {
 }
 
 // readUSR liest Nutzerspeicher des maskierten Tags.
+// tagRetries: so oft wird ein Lese- oder Schreibbefehl wiederholt, wenn der
+// Tag in dieser Funkrunde nicht geantwortet hat. Am echten DeskID kam das bei
+// gut aufliegendem Tag (-32 dBm) vor; beim nächsten Versuch war er wieder da.
+const tagRetries = 3
+
+// tagCommand schickt einen Befehl an den (maskierten) Tag und liefert seine
+// Antwortzeile. Antwortet kein Tag, wird wiederholt.
+func (r *Reader) tagCommand(c *atConn, cmd, prefix string) (tagResult, error) {
+	for try := 1; ; try++ {
+		lines, err := c.command(cmd, writeTimeout)
+		if err != nil {
+			return tagResult{}, err
+		}
+		if res := parseTagResults(lines, prefix); len(res) > 0 {
+			return res[0], nil
+		}
+		if try >= tagRetries {
+			return tagResult{}, device.Errf("no_tag", fmt.Sprintf("Tag hat %d-mal nicht geantwortet – bitte ruhig auflegen und nochmal.", tagRetries))
+		}
+		r.log.Debug("Tag hat nicht geantwortet, nochmal", "cmd", cmd, "try", try)
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func (r *Reader) readUSR(c *atConn, start, length int) ([]byte, error) {
-	lines, err := c.command(fmt.Sprintf("AT+READ=USR,%d,%d", start, length), writeTimeout)
+	res, err := r.tagCommand(c, fmt.Sprintf("AT+READ=USR,%d,%d", start, length), "+READ: ")
 	if err != nil {
 		return nil, err
 	}
-	res := parseTagResults(lines, "+READ: ")
-	if len(res) == 0 {
-		return nil, device.Errf("no_tag", "Tag beim Lesen nicht mehr gefunden.")
+	if res.Status != "OK" {
+		return nil, device.Errf("read_failed", "Lesen fehlgeschlagen: "+res.Status)
 	}
-	if res[0].Status != "OK" {
-		return nil, device.Errf("read_failed", "Lesen fehlgeschlagen: "+res[0].Status)
-	}
-	data, err := hex.DecodeString(res[0].Data)
+	data, err := hex.DecodeString(res.Data)
 	if err != nil {
-		return nil, device.Errf("bad_response", "Speicherinhalt nicht lesbar: "+res[0].Data)
+		return nil, device.Errf("bad_response", "Speicherinhalt nicht lesbar: "+res.Data)
 	}
 	return data, nil
 }
@@ -672,18 +691,22 @@ func (r *Reader) writeURI(c *atConn, p writeParams) (any, error) {
 		return nil, device.Errf("bad_request", err.Error())
 	}
 	err = r.withMask(c, tag.TID, func() error {
+		// Einen vorhandenen Capability Container weiterverwenden: er nennt die
+		// echte Größe des NFC-Bereichs (MLEN) und die Fähigkeiten des Chips.
+		// Unser eigener kennt nur die Länge des Geschriebenen.
+		if cc, err := r.readUSR(c, p.Offset, 4); err == nil {
+			keepCC(data, cc)
+		} else if fatal(err) {
+			return err
+		}
 		for i := 0; i < len(data); i += writeChunk {
 			part := data[i:min(i+writeChunk, len(data))]
-			lines, err := c.command(fmt.Sprintf("AT+WRT=USR,%d,%s", p.Offset+i, strings.ToUpper(hex.EncodeToString(part))), writeTimeout)
+			res, err := r.tagCommand(c, fmt.Sprintf("AT+WRT=USR,%d,%s", p.Offset+i, strings.ToUpper(hex.EncodeToString(part))), "+WRT: ")
 			if err != nil {
 				return err
 			}
-			res := parseTagResults(lines, "+WRT: ")
-			if len(res) == 0 {
-				return device.Errf("no_tag", "Tag beim Schreiben nicht mehr gefunden – bitte liegen lassen und nochmal.")
-			}
-			if res[0].Status != "OK" {
-				return device.Errf("write_failed", fmt.Sprintf("Schreiben bei Byte %d fehlgeschlagen: %s", p.Offset+i, res[0].Status))
+			if res.Status != "OK" {
+				return device.Errf("write_failed", fmt.Sprintf("Schreiben bei Byte %d fehlgeschlagen: %s", p.Offset+i, res.Status))
 			}
 		}
 		back, err := r.readUSR(c, p.Offset, len(data))
