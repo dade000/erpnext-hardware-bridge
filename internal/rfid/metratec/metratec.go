@@ -202,7 +202,7 @@ func (r *Reader) Run(ctx context.Context) {
 		}
 		r.st.Update(func(st *device.Status) { st.Port = path })
 		r.log.Info("RFID-Reader geöffnet", "path", path, "baud", r.cfg.Baud)
-		err = r.session(ctx, &atConn{port: port})
+		err = r.session(ctx, &atConn{port: port, log: r.log})
 		_ = port.Close()
 		if ctx.Err() != nil {
 			return
@@ -326,11 +326,15 @@ func (r *Reader) session(ctx context.Context, c *atConn) error {
 	}
 	poll := func() error {
 		var err error
+		// Die Dauerabfrage nicht mitschneiden: sie liefe im Debug-Log alle
+		// paar hundert Millisekunden durch und verdeckte alles andere.
+		c.quiet = true
 		if r.demand.Load() > 0 {
 			_, err = r.inventory(c)
 		} else {
 			_, err = c.command("AT", cmdTimeout)
 		}
+		c.quiet = false
 		note(err)
 		return err
 	}
@@ -521,15 +525,30 @@ func (r *Reader) tagCommand(c *atConn, cmd, prefix string) (tagResult, error) {
 		if err != nil {
 			return tagResult{}, err
 		}
-		if res := parseTagResults(lines, prefix); len(res) > 0 {
+		res := parseTagResults(lines, prefix)
+		switch {
+		case len(res) > 0 && (res[0].Status == "OK" || !retryable(res[0].Status)):
 			return res[0], nil
+		case try >= tagRetries && len(res) > 0:
+			return res[0], nil
+		case try >= tagRetries:
+			return tagResult{}, device.Errf("no_tag", fmt.Sprintf("Tag hat auf %s %d-mal nicht geantwortet – bitte ruhig auflegen und nochmal.", cmd, tagRetries))
 		}
-		if try >= tagRetries {
-			return tagResult{}, device.Errf("no_tag", fmt.Sprintf("Tag hat %d-mal nicht geantwortet – bitte ruhig auflegen und nochmal.", tagRetries))
+		status := "keine Antwort"
+		if len(res) > 0 {
+			status = res[0].Status
 		}
-		r.log.Debug("Tag hat nicht geantwortet, nochmal", "cmd", cmd, "try", try)
-		time.Sleep(50 * time.Millisecond)
+		r.log.Info("Tag-Befehl wird wiederholt", "cmd", cmd, "try", try, "status", status)
+		// Nach einem Schreibvorgang braucht das EEPROM des Chips einen Moment.
+		time.Sleep(time.Duration(30*try) * time.Millisecond)
 	}
+}
+
+// retryable: Antworten eines Tags, bei denen ein zweiter Versuch helfen kann.
+// Speicherende und Zugriffsfehler bleiben beim nächsten Mal dieselben.
+func retryable(status string) bool {
+	up := strings.ToUpper(status)
+	return !strings.Contains(up, "OVERRUN") && !strings.Contains(up, "ACCESS") && !strings.Contains(up, "LOCK")
 }
 
 func (r *Reader) readUSR(c *atConn, start, length int) ([]byte, error) {
@@ -538,7 +557,7 @@ func (r *Reader) readUSR(c *atConn, start, length int) ([]byte, error) {
 		return nil, err
 	}
 	if res.Status != "OK" {
-		return nil, device.Errf("read_failed", "Lesen fehlgeschlagen: "+res.Status)
+		return nil, device.Errf("read_failed", fmt.Sprintf("Lesen fehlgeschlagen (AT+READ=USR,%d,%d): %s", start, length, res.Status))
 	}
 	data, err := hex.DecodeString(res.Data)
 	if err != nil {

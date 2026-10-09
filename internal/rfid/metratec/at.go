@@ -2,7 +2,9 @@ package metratec
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +29,10 @@ import (
 type atConn struct {
 	port serialport.Port
 	buf  []byte
+	// log bekommt bei Level debug jeden Befehl und jede Antwortzeile; nil
+	// oder quiet = nichts.
+	log   *slog.Logger
+	quiet bool
 }
 
 // atError ist eine ERROR-Antwort des Readers.
@@ -52,6 +58,10 @@ func isEvent(line string) bool {
 func (c *atConn) command(cmd string, timeout time.Duration) ([]string, error) {
 	_ = c.port.ResetInputBuffer()
 	c.buf = c.buf[:0]
+	trace := c.log != nil && !c.quiet && c.log.Enabled(context.Background(), slog.LevelDebug)
+	if trace {
+		c.log.Debug("AT →", "cmd", cmd)
+	}
 	if _, err := c.port.Write([]byte(cmd + "\r")); err != nil {
 		return nil, err
 	}
@@ -62,8 +72,14 @@ func (c *atConn) command(cmd string, timeout time.Duration) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		if trace && line != "" {
+			c.log.Debug("AT ←", "line", line)
+		}
 		switch {
 		case line == "":
+			if trace {
+				c.log.Debug("AT ← (Zeitüberschreitung)", "cmd", cmd)
+			}
 			return nil, device.Errf("timeout", "RFID-Reader hat auf "+cmd+" nicht rechtzeitig geantwortet")
 		case line == cmd, isEvent(line):
 			continue

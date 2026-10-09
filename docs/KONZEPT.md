@@ -934,3 +934,10 @@ Vierter/fünfter Test: `AT+READ` lehnt schon 32 Byte mit `Read length too big`
 ab (16 gehen; »Testen« hatte still halbiert und so 32 vorgetäuscht). Die
 Leselänge wird deshalb ausprobiert – 32, bei genau diesem Fehler halbieren –
 und für die Sitzung gemerkt.
+
+Sechster Test: Kontrolllesen bekam `+READ: <EPC>,ERROR`. Lese-/Schreibbefehle
+werden jetzt auch bei einem Fehlerstatus des Tags wiederholt (außer
+Speicherende und Zugriffsfehler), mit kurzer Pause, falls das EEPROM nach dem
+Schreiben noch beschäftigt ist. Bei Log-Level `debug` schneidet der Treiber
+jeden AT-Befehl und jede Antwortzeile mit (ohne die Dauerabfrage).
+

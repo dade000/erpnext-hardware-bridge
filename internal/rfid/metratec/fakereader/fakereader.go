@@ -43,7 +43,12 @@ type Reader struct {
 	oldFirmware bool
 	// miss: so viele der nächsten READ/WRT finden keinen Tag (Funkaussetzer).
 	miss int
+	// failReads: so viele der nächsten AT+READ antworten mit Status ERROR.
+	failReads int
 }
+
+// FailReads lässt die nächsten n AT+READ mit Tag-Status ERROR antworten.
+func (r *Reader) FailReads(n int) { r.mu.Lock(); r.failReads = n; r.mu.Unlock() }
 
 // Miss lässt die nächsten n Lese-/Schreibbefehle ohne Tag antworten.
 func (r *Reader) Miss(n int) { r.mu.Lock(); r.miss = n; r.mu.Unlock() }
@@ -205,6 +210,10 @@ func (r *Reader) answer(cmd string) []byte {
 		tags := r.visible()
 		if len(tags) == 0 {
 			return ok("+READ: <NO TAGS FOUND>")
+		}
+		if r.failReads > 0 {
+			r.failReads--
+			return ok("+READ: " + tags[0].EPC + ",ERROR")
 		}
 		if f[0] == "TID" {
 			var lines []string

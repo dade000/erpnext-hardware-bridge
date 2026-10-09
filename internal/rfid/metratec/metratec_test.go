@@ -451,3 +451,22 @@ func TestExistingCapabilityContainerIsKept(t *testing.T) {
 		t.Fatalf("%+v %v", info, err)
 	}
 }
+
+// Am echten Reader kam beim Kontrolllesen einmal "+READ: <EPC>,ERROR".
+func TestTagErrorStatusIsRetried(t *testing.T) {
+	h := start(t, 0)
+	waitState(t, h.r, device.StateOnline)
+	tag := tagA()
+	tag.USR = make([]byte, 32)
+	tag.HF, tag.HFStart = make([]byte, 184), 320
+	h.fake.Put(tag)
+	h.fake.FailReads(2)
+	if _, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}", "offset": 320}); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.FailReads(10)
+	_, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}", "offset": 320})
+	if code(err) != "read_failed" || !strings.Contains(err.Error(), "AT+READ=USR,320,") {
+		t.Fatalf("dauerhafter Fehler: %v", err)
+	}
+}
