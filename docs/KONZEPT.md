@@ -850,3 +850,50 @@ echter Lauf in einem Container mit CUPS, Warteschlange mit PCL-Treiber
 (`generpcl.ppd`) und Datei als Ziel: PDF über die WS-API gedruckt, heraus
 kam PCL mit A4; ZPL an denselben Drucker abgelehnt. Nicht geprüft: echter
 Drucker.
+
+## 22. RFID-Reader metratec DeskID UHF v2 (2026-10-09)
+
+Anlass: Die Fotostation soll den RFID-Tag am Paar lesen und ihn so
+beschreiben, dass ein Handy `https://holzschuhe.at/u/<tid>` öffnet. Der
+Reader ist UHF (868 MHz), Handys können nur NFC (13,56 MHz). Das geht nur mit
+Dual-Frequenz-Tags, bei denen beide Seiten denselben Speicher sehen – hier
+EM4425 (em|echo-V).
+
+Treiber `rfid/metratec_uhf`: USB-C, virtueller COM-Port, 115200 Baud,
+metratec-AT-Protokoll (Vorlage: `github.com/metratec/rfid-sdk-python`,
+Klasse `DeskIdUhfv2`). Beim Verbinden: `ATE0`, `ATI` (Kennung muss "UHF"
+enthalten, sonst Zustand `error`), `AT+BINV` (ein altes Dauer-Inventory
+beenden), `AT+INVS` mit TID und RSSI, `AT+PWR` aus `power_dbm`. Mit Zuhörern
+läuft im `poll_ms`-Takt `AT+INV`; `rfid.tags` geht nur bei Änderungen raus.
+Ohne Zuhörer alle 5 s `AT` als Lebenszeichen.
+
+Schreiben: genau ein Tag mit TID, dann `AT+MSK=TID,0,<tid>` (alle folgenden
+Funkbefehle nur für diesen Tag), `AT+WRT=USR,<byte>,<hex>` in 16-Byte-Stücken,
+`AT+READ` zur Kontrolle, `AT+MSK=OFF` auch im Fehlerfall. Adressen im
+Nutzerspeicher sind Byte-Adressen (laut SDK). Der Inhalt ist ein NFC Forum
+Type 5 Tag: CC `E1 4x MLEN 00` (MLEN = nur das Geschriebene, weil die Größe
+des NFC-Bereichs unbekannt ist), NDEF-TLV mit einem URI-Record, Terminator,
+aufgefüllt auf 4-Byte-Blöcke.
+
+Offen, nur mit echten Tags zu klären:
+
+- **Wo der NFC-Bereich im UHF-Nutzerspeicher beginnt.** Der EM4425 teilt
+  seinen 2048-bit-Speicher in HF-User, UHF-User, EPC und Signatur auf; die
+  Aufteilung ist einstellbar und steht nur im vollen Datenblatt (»on
+  request«). Deshalb kommt der Offset vom Aufrufer, und »Testen« zeigt den
+  Speicherauszug samt gefundener Adresse: mit einer Handy-App (z.B. NFC
+  Tools) eine Adresse schreiben, dann in der Bridge testen – der angezeigte
+  Offset ist der richtige. Ist der UHF-Nutzerspeicher leer partitioniert,
+  schlägt schon das Lesen fehl; dann braucht es das volle Datenblatt.
+- **Sperren.** `read_only` setzt nur das Zugriffsbyte im Capability
+  Container; Handys und NFC-Apps halten sich daran, ein Angreifer mit eigener
+  Software nicht. Eine echte Sperre (UHF-Access-Passwort + `AT+LCK`, NFC-seitig
+  Blocksperre/Passwort des EM4425) ist nicht gebaut.
+- Maximale Datenmenge je `AT+WRT`/`AT+READ` (16 bzw. 64 Byte sind
+  vorsichtig gewählt), Sendeleistung für »nur das aufgelegte Paar«.
+
+Getestet: Unit-Tests gegen einen nachgebauten Reader (Echo, Zeilen in
+Häppchen, Maske, Speicherüberlauf, Schreibfehler, abgezogenes Kabel, stummer
+Reader) und ein Lauf der echten Bridge gegen `testdata/fake_deskid_uhf.py` an
+einem PTY, angesteuert über `hwbridge.js` im Browser. Nicht geprüft: echter
+Reader, echter Tag, Handy.

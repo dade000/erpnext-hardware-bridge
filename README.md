@@ -20,6 +20,7 @@ Konzept und Entscheidungen: [docs/KONZEPT.md](docs/KONZEPT.md).
 | 2 | Kamera (libgphoto2, nur Linux) | offen – bis dahin reicht die Bridge `/shot` und `/health` an die Flask-App weiter |
 | 3 | Serieller Scanner | offen |
 | 3 | Zahlungsterminal: feste WebSocket-Weiterleitung `ws://127.0.0.1:<port>` → Terminal im LAN | gebaut; gegen ein nachgebautes Terminal mit der echten TIM-Bibliothek aus der Kasse getestet, an keinem echten Terminal |
+| 4 | RFID-Reader metratec DeskID UHF v2 (AT-Protokoll): Tags im Feld live, NFC-Adresse auf Dual-Frequenz-Tags (EM4425) schreiben und zurücklesen, Speicherauszug zum Einrichten | gebaut; gegen einen nachgebauten Reader getestet (Unit-Tests und PTY-Simulator), an keinem echten Reader |
 | 4 | Druckmodul: Labels roh (ZPL) und PDFs über IPP/IPPS auf Drucker der Station, Standarddrucker für den Schnelldruck im Desk | gebaut; Netzwerkdrucker, Gerätedatei und IPP gegen Attrappen getestet, IPP-Abfrage gegen einen echten CUPS-Server; PDF über eine CUPS-Warteschlange mit Treiber (`system`, `accept: pdf`) gegen echtes CUPS mit PCL-Treiber getestet; Rohdruck über CUPS/Windows-Spooler nur kompiliert, an keinem echten Drucker gedruckt |
 
 ## Schnellstart
@@ -156,10 +157,32 @@ an den Parcel-Station-PC hängen und dort die Bridge installieren.
 
 Methoden: `hello`, `devices.list`, `bridge.info`, `scale.subscribe`,
 `scale.unsubscribe`, `scale.read`, `scale.tare`, `printer.print`,
-`printer.test`. Fehlercodes: `device_missing`, `scale_offline`, `timeout`,
+`printer.test`, `rfid.subscribe`, `rfid.unsubscribe`, `rfid.inventory`,
+`rfid.read`, `rfid.write_uri`. Fehlercodes: `device_missing`, `scale_offline`, `timeout`,
 `bad_response`, `busy`, `unauthorized`, `protocol_mismatch`,
 `unknown_method`, `unsupported_format`, `print_failed`, `too_large`,
-`bad_request`, `unexpected`.
+`bad_request`, `unexpected`, `rfid_offline`, `no_tag`, `multiple_tags`,
+`no_tid`, `tag_changed`, `write_failed`, `read_failed`, `verify_failed`,
+`reader_error`, `wrong_reader`.
+
+### RFID
+
+```
+→ {"id":4,"type":"req","method":"rfid.subscribe"}
+← {"type":"event","event":"rfid.tags","device":"rfid","data":{"tags":[{"epc":"3034…","tid":"E280…","rssi":-51}],"ts":"…"}}
+→ {"id":5,"type":"req","method":"rfid.write_uri","params":{"uri":"https://holzschuhe.at/u/{tid}","offset":0}}
+← {"id":5,"type":"res","ok":true,"result":{"tid":"E280…","uri":"https://holzschuhe.at/u/E280…","bytes":52,"verified":true,"read_only":true,…}}
+```
+
+`rfid.tags` kommt nur bei Änderungen (Tag aufgelegt/weggenommen).
+`write_uri` verlangt genau einen Tag mit lesbarer TID, ersetzt `{tid}`,
+schreibt einen NFC-Type-5-Inhalt (Capability Container + URI-Record) ab
+`offset` in den UHF-Nutzerspeicher und liest zur Kontrolle zurück.
+`read_only` (Vorgabe true) kennzeichnet den Tag für Handys als
+schreibgeschützt; eine Hardware-Sperre ist das nicht. `expect_tid` bricht ab,
+wenn ein anderer Tag aufliegt. `rfid.read` (auch »Testen« in der Oberfläche)
+liefert die Tags und bei genau einem die ersten 64 Byte Nutzerspeicher samt
+gefundener Adresse und deren Offset.
 
 ### Drucken
 
@@ -208,6 +231,7 @@ verwenden (wird in die Apps kopiert).
 ```sh
 go test ./...
 python3 testdata/fake_pce_scale.py /tmp/waage     # simulierte Waage an einem PTY
+python3 testdata/fake_deskid_uhf.py /tmp/rfid      # simulierter RFID-Reader an einem PTY
 go run ./cmd/bridge -config ./bridge.yaml -log-file -
 ```
 

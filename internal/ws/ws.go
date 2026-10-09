@@ -261,7 +261,7 @@ func (ss *session) dispatch(ctx context.Context, method string, raw json.RawMess
 		return nil, device.Errf("bad_request", "hello nur einmal")
 	}
 	kind, cmd, ok := strings.Cut(method, ".")
-	if !ok || (kind != "scale" && kind != "printer") {
+	if !ok || (kind != "scale" && kind != "printer" && kind != "rfid") {
 		return nil, device.Errf("unknown_method", method+" gibt es nicht")
 	}
 	var p deviceParams

@@ -38,17 +38,22 @@ type Config struct {
 // DeviceConfig beschreibt ein angeschlossenes Gerät.
 type DeviceConfig struct {
 	ID     string   `yaml:"id" json:"id"`
-	Kind   string   `yaml:"kind" json:"kind"`     // scale, camera, scanner, printer, terminal
+	Kind   string   `yaml:"kind" json:"kind"`     // scale, camera, scanner, printer, terminal, rfid
 	Driver string   `yaml:"driver" json:"driver"` // pce_pb, …
 	Port   PortSpec `yaml:"port" json:"port"`
 
-	// Serielle Parameter (Waage, Scanner).
+	// Serielle Parameter (Waage, Scanner, RFID-Reader).
 	Baud int `yaml:"baud,omitempty" json:"baud,omitempty"`
 
-	// Waage.
+	// Waage, RFID-Reader (Inventory-Takt, solange jemand zusieht).
 	PollMS            int     `yaml:"poll_ms,omitempty" json:"poll_ms,omitempty"`
 	StableSamples     int     `yaml:"stable_samples,omitempty" json:"stable_samples,omitempty"`
 	StableToleranceKG float64 `yaml:"stable_tolerance_kg,omitempty" json:"stable_tolerance_kg,omitempty"`
+
+	// RFID-Reader: Sendeleistung in dBm (DeskID UHF v2: 0–9). Wenig
+	// Leistung = kurze Reichweite, damit nur das aufgelegte Paar antwortet.
+	// 0 = Einstellung des Readers nicht ändern.
+	PowerDBm int `yaml:"power_dbm,omitempty" json:"power_dbm,omitempty"`
 
 	// Drucker: Address für raw_tcp (host:port, üblich 9100), Port.Path für
 	// raw_file, Queue für system (Druckwarteschlange des Betriebssystems),
@@ -143,7 +148,7 @@ type BasicAuth struct {
 // Bekannte Treiber je Geräteklasse. Nicht enthaltene Treiber werden trotzdem
 // akzeptiert, damit eine Config aus einem neueren Build nicht beim Laden
 // scheitert; das Gerät meldet dann »Treiber nicht enthalten«.
-var knownKinds = map[string]bool{"scale": true, "camera": true, "scanner": true, "printer": true, "terminal": true}
+var knownKinds = map[string]bool{"scale": true, "camera": true, "scanner": true, "printer": true, "terminal": true, "rfid": true}
 
 // Default liefert eine lauffähige Startkonfiguration ohne Geräte.
 func Default() *Config {
@@ -186,6 +191,14 @@ func (c *Config) ApplyDefaults() {
 				d.StableToleranceKG = 0.005
 			}
 		}
+		if d.Kind == "rfid" {
+			if d.Baud == 0 {
+				d.Baud = 115200
+			}
+			if d.PollMS == 0 {
+				d.PollMS = 400
+			}
+		}
 	}
 	for i, o := range c.AllowedOrigins {
 		c.AllowedOrigins[i] = NormalizeOrigin(o)
@@ -226,12 +239,12 @@ func (c *Config) Validate() error {
 		}
 		seen[d.ID] = true
 		if !knownKinds[d.Kind] {
-			errs = append(errs, fmt.Errorf("%s: kind %q unbekannt (scale, camera, scanner, printer, terminal)", where, d.Kind))
+			errs = append(errs, fmt.Errorf("%s: kind %q unbekannt (scale, camera, scanner, printer, terminal, rfid)", where, d.Kind))
 		}
 		if d.Driver == "" {
 			errs = append(errs, fmt.Errorf("%s: driver fehlt", where))
 		}
-		if d.Kind == "scale" || d.Kind == "scanner" {
+		if d.Kind == "scale" || d.Kind == "scanner" || d.Kind == "rfid" {
 			if d.Port.Path == "" && d.Port.Match == nil {
 				errs = append(errs, fmt.Errorf("%s: port fehlt (path oder match)", where))
 			}
@@ -243,6 +256,14 @@ func (c *Config) Validate() error {
 			}
 			if d.Baud < 50 || d.Baud > 4_000_000 {
 				errs = append(errs, fmt.Errorf("%s: baud %d ungültig", where, d.Baud))
+			}
+		}
+		if d.Kind == "rfid" {
+			if d.PowerDBm < 0 || d.PowerDBm > 30 {
+				errs = append(errs, fmt.Errorf("%s: power_dbm %d ungültig (0 = Reader-Einstellung, DeskID UHF v2: 1–9)", where, d.PowerDBm))
+			}
+			if d.PollMS < 100 || d.PollMS > 10000 {
+				errs = append(errs, fmt.Errorf("%s: poll_ms %d ungültig (100–10000)", where, d.PollMS))
 			}
 		}
 		if d.Kind == "printer" {

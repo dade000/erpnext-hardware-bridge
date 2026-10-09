@@ -191,3 +191,27 @@ func TestSaveAtomicWithBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRFIDDefaultsAndValidation(t *testing.T) {
+	c := Default()
+	c.Devices = []DeviceConfig{
+		{ID: "rfid", Kind: "rfid", Driver: "metratec_uhf", Port: PortSpec{Path: "/dev/ttyACM0"}},
+		{ID: "rfid2", Kind: "rfid", Driver: "metratec_uhf", PowerDBm: 40},
+	}
+	c.ApplyDefaults()
+	if c.Devices[0].Baud != 115200 || c.Devices[0].PollMS != 400 {
+		t.Fatalf("Defaults: %+v", c.Devices[0])
+	}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("rfid2 ohne Port und mit 40 dBm sollte scheitern")
+	}
+	for _, want := range []string{`"rfid2": port fehlt`, `"rfid2": power_dbm 40`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Fehlermeldung ohne %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), `"rfid":`) {
+		t.Errorf("rfid ist gültig: %v", err)
+	}
+}

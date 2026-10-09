@@ -118,6 +118,7 @@ pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-hei
         <button class="btn" id="add-scale">+ Waage</button>
         <button class="btn" id="add-printer">+ Drucker</button>
         <button class="btn" id="add-terminal">+ Zahlungsterminal</button>
+        <button class="btn" id="add-rfid">+ RFID-Reader</button>
         <button class="btn" id="rescan">Ports neu suchen</button>
         <span class="muted small" id="ports-info"></span>
       </div>
@@ -184,6 +185,11 @@ function fmtLast(d) {
   if (d.kind === "scale" && typeof l.kg === "number") {
     const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
     return `<span class="weight">${l.kg.toFixed(3)} kg</span> ${l.stable ? "stabil" : '<span class="muted">bewegt</span>'}<div class="muted small">roh „${esc(l.raw)}“, vor ${age}s</div>`;
+  }
+  if (d.kind === "rfid" && l.ts) {
+    const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
+    const tags = l.tags || [];
+    return `${tags.length ? tags.length + " Tag" + (tags.length > 1 ? "s" : "") : "kein Tag"} im Feld<div class="muted small">${tags.map((t) => esc(t.tid || t.epc)).join(", ")} · vor ${age}s</div>`;
   }
   if (d.kind === "terminal" && l.ts) {
     const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
@@ -426,13 +432,25 @@ function portOptions() {
   return opts;
 }
 
+// Portauswahl für serielle Geräte (Waage, RFID-Reader).
+function serialFields(d, i) {
+  const mode = d.port && d.port.match ? "match" : "path";
+  const m = (d.port && d.port.match) || {};
+  const usb = ports.filter((p) => p.is_usb);
+  return `<label>Port-Auswahl<select data-f="portmode">
+          <option value="path" ${mode === "path" ? "selected" : ""}>Pfad (/dev/…, COM…)</option>
+          <option value="match" ${mode === "match" ? "selected" : ""}>USB-Merkmale (VID/PID)</option></select></label>
+        <label class="${mode === "path" ? "" : "hidden"}">Pfad<input data-f="path" list="dl-${i}" value="${esc(d.port && d.port.path)}" placeholder="${d.kind === "rfid" ? "/dev/ttyACM0 oder COM6" : "/dev/waage oder COM5"}">
+          <datalist id="dl-${i}">${portOptions().map((o) => `<option value="${esc(o)}">`).join("")}</datalist></label>
+        <label class="${mode === "match" ? "" : "hidden"}">USB-Gerät<select data-f="usb">
+          <option value="">${m.vid ? `${esc(m.vid)}:${esc(m.pid)} ${esc(m.serial || "")}` : "– wählen –"}</option>
+          ${usb.map((p, j) => `<option value="${j}">${esc(p.name)} · ${esc(p.vid)}:${esc(p.pid)} ${esc(p.serial || "")} ${esc(p.product || "")}</option>`).join("")}</select></label>`;
+}
+
 function renderDevices() {
   const box = $("c-devices");
   if (!cfg.devices.length) { box.innerHTML = '<p class="muted">Noch keine Geräte.</p>'; return; }
   box.innerHTML = cfg.devices.map((d, i) => {
-    const mode = d.port && d.port.match ? "match" : "path";
-    const m = (d.port && d.port.match) || {};
-    const usb = ports.filter((p) => p.is_usb);
     const kindDrivers = drivers[d.kind] || [];
     return `<div class="device" data-i="${i}">
       <div class="device-head"><b>${esc(d.id || "neues Gerät")}</b>
@@ -445,18 +463,15 @@ function renderDevices() {
         <label>ID<input data-f="id" value="${esc(d.id)}"></label>
         <label>${d.kind === "printer" ? "Anschluss" : "Treiber"}<select data-f="driver">${kindDrivers.map((x) => `<option value="${esc(x)}" ${x === d.driver ? "selected" : ""}>${esc(d.kind === "printer" && PRINTER_DRIVERS[x] || x)}</option>`).join("")}
           ${kindDrivers.includes(d.driver) ? "" : `<option selected>${esc(d.driver)}</option>`}</select></label>
-        ${d.kind === "scale" ? `        <label>Port-Auswahl<select data-f="portmode">
-          <option value="path" ${mode === "path" ? "selected" : ""}>Pfad (/dev/…, COM…)</option>
-          <option value="match" ${mode === "match" ? "selected" : ""}>USB-Merkmale (VID/PID)</option></select></label>
-        <label class="${mode === "path" ? "" : "hidden"}">Pfad<input data-f="path" list="dl-${i}" value="${esc(d.port && d.port.path)}" placeholder="/dev/waage oder COM5">
-          <datalist id="dl-${i}">${portOptions().map((o) => `<option value="${esc(o)}">`).join("")}</datalist></label>
-        <label class="${mode === "match" ? "" : "hidden"}">USB-Gerät<select data-f="usb">
-          <option value="">${m.vid ? `${esc(m.vid)}:${esc(m.pid)} ${esc(m.serial || "")}` : "– wählen –"}</option>
-          ${usb.map((p, j) => `<option value="${j}">${esc(p.name)} · ${esc(p.vid)}:${esc(p.pid)} ${esc(p.serial || "")} ${esc(p.product || "")}</option>`).join("")}</select></label>
+        ${d.kind === "scale" ? `${serialFields(d, i)}
         <label>Baud<select data-f="baud">${[1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200].map((b) => `<option ${b === d.baud ? "selected" : ""}>${b}</option>`).join("")}</select></label>
         <label>Abfrage alle (ms)<input data-f="poll_ms" type="number" min="50" max="10000" value="${d.poll_ms || 250}"></label>
         <label>Stabil nach n gleichen Werten<input data-f="stable_samples" type="number" min="1" max="50" value="${d.stable_samples || 4}"></label>
-        <label>Toleranz (kg)<input data-f="stable_tolerance_kg" type="number" step="0.001" min="0" value="${d.stable_tolerance_kg ?? 0.005}"></label>` : d.kind === "printer" ? `${printerFields(d, i)}
+        <label>Toleranz (kg)<input data-f="stable_tolerance_kg" type="number" step="0.001" min="0" value="${d.stable_tolerance_kg ?? 0.005}"></label>` : d.kind === "rfid" ? `${serialFields(d, i)}
+        <label>Baud<select data-f="baud">${[9600, 19200, 38400, 57600, 115200].map((b) => `<option ${b === d.baud ? "selected" : ""}>${b}</option>`).join("")}</select></label>
+        <label>Abfrage alle (ms)<input data-f="poll_ms" type="number" min="100" max="10000" value="${d.poll_ms || 400}"></label>
+        <label>Sendeleistung (dBm, 0 = Reader-Einstellung)<input data-f="power_dbm" type="number" min="0" max="9" value="${d.power_dbm || 0}"></label>
+        <p class="muted small" style="grid-column:1/-1">metratec DeskID UHF v2: USB-C, 115200 Baud. Wenig Sendeleistung (z.B. 2–4 dBm) hält die Reichweite kurz, damit nur das aufgelegte Paar antwortet. »Testen« liest die Tags am Reader und, wenn genau einer aufliegt, die ersten Bytes seines Nutzerspeichers samt einer dort gefundenen Adresse – so lässt sich prüfen, wo der NFC-Bereich beginnt.</p>` : d.kind === "printer" ? `${printerFields(d, i)}
         <label class="check" style="grid-column:1/-1"><input type="checkbox" data-f="default" ${d.default ? "checked" : ""}>Standarddrucker dieses Arbeitsplatzes (für den Schnelldruck im ERPNext, je Format einer)</label>
         <p class="muted small" style="grid-column:1/-1">${printerNote(d)}</p>` : d.kind === "terminal" ? `
         <label>Terminal (IP:Port im LAN)<input data-f="address" value="${esc(d.address)}" placeholder="192.168.1.50:80"></label>
@@ -506,7 +521,7 @@ function onDeviceEdit(ev) {
       if (p) d.port = { match: { vid: p.vid, pid: p.pid, serial: p.serial || "" } };
       return;
     }
-    case "baud": case "poll_ms": case "stable_samples": d[f] = parseInt(v, 10) || 0; return;
+    case "baud": case "poll_ms": case "stable_samples": case "power_dbm": d[f] = parseInt(v, 10) || 0; return;
     case "stable_tolerance_kg": d[f] = parseFloat(v) || 0; return;
   }
 }
@@ -521,7 +536,7 @@ $("c-devices").addEventListener("click", async (ev) => {
     return;
   }
   const out = card.querySelector('[data-out="test"]');
-  out.innerHTML = `<span class="muted">${d.kind === "printer" ? "Drucke…" : d.kind === "terminal" ? "Verbinde…" : "Messe…"}</span>`;
+  out.innerHTML = `<span class="muted">${d.kind === "printer" ? "Drucke…" : d.kind === "terminal" ? "Verbinde…" : d.kind === "rfid" ? "Lese…" : "Messe…"}</span>`;
   const r = await api("POST", `/api/devices/${encodeURIComponent(d.id)}/test`);
   if (r.data.ok) {
     const x = r.data.result;
@@ -529,6 +544,8 @@ $("c-devices").addEventListener("click", async (ev) => {
       ? `<div class="notice n-ok">${x.format === "pdf" ? "Testseite (PDF)" : x.format === "escpos" ? "Testbon (ESC/POS)" : "Testetikett (ZPL)"} gesendet (${x.bytes} Bytes). Kommt nichts aus dem Drucker, stimmt der Anschluss oder die Druckersprache nicht.</div>`
       : d.kind === "terminal"
       ? `<div class="notice n-ok">Terminal ${esc(x.target)} antwortet (${x.ms} ms).</div>`
+      : d.kind === "rfid"
+      ? rfidTestResult(x)
       : `<div class="notice n-ok">Antwort: <b>${x.kg.toFixed(3)} kg</b> (roh „${esc(x.raw)}“)</div>`;
   } else {
     const e = r.data.error || {};
@@ -536,6 +553,29 @@ $("c-devices").addEventListener("click", async (ev) => {
   }
 });
 
+function rfidTestResult(x) {
+  const tags = x.tags || [];
+  if (!tags.length) return `<div class="notice n-ok">Reader antwortet${x.reader && x.reader.firmware ? ` (${esc(x.reader.firmware)})` : ""}, aber kein Tag im Feld.</div>`;
+  let h = `<div class="notice n-ok">${tags.length} Tag${tags.length > 1 ? "s" : ""} im Feld:<br>` +
+    tags.map((t) => `TID <code>${esc(t.tid || "?")}</code> · EPC <code>${esc(t.epc)}</code> · ${t.rssi} dBm`).join("<br>") + "</div>";
+  if (tags.length > 1) return h + '<p class="muted small">Für den Speicherauszug nur einen Tag auflegen.</p>';
+  if (x.usr_error) return h + `<div class="notice n-err">Nutzerspeicher nicht lesbar: ${esc(x.usr_error)}</div>`;
+  if (x.usr) {
+    const hexs = x.usr.match(/.{1,8}/g).map((w, k) => `<span title="Byte ${k * 4}">${w}</span>`).join(" ");
+    h += `<div class="small">Nutzerspeicher ab Byte 0: <code style="word-break:break-all">${hexs}</code></div>`;
+    h += x.ndef
+      ? `<div class="notice n-ok">Adresse gefunden ab Byte <b>${x.ndef.offset}</b>: ${esc(x.ndef.uri)}${x.ndef.read_only ? " (als schreibgeschützt gekennzeichnet)" : ""}</div>`
+      : `<p class="muted small">Keine Adresse im Speicher (${esc(x.ndef_error || "")}).</p>`;
+  }
+  return h;
+}
+
+$("add-rfid").addEventListener("click", () => {
+  const n = cfg.devices.filter((d) => d.kind === "rfid").length;
+  cfg.devices.push({ id: n ? `rfid${n + 1}` : "rfid", kind: "rfid", driver: (drivers.rfid || ["metratec_uhf"])[0],
+    port: { path: "" }, baud: 115200, poll_ms: 400, power_dbm: 3 });
+  renderDevices();
+});
 $("add-scale").addEventListener("click", () => {
   const n = cfg.devices.filter((d) => d.kind === "scale").length;
   cfg.devices.push({ id: n ? `waage${n + 1}` : "waage", kind: "scale", driver: (drivers.scale || ["pce_pb"])[0],

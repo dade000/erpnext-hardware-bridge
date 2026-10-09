@@ -24,6 +24,9 @@
  *   await hw.print("labeldrucker", base64Zpl, "SHIPMENT-00150");
  *   hw.defaultPrinter("pdf");                  // Standarddrucker des Arbeitsplatzes für PDF
  *   await hw.print(null, base64Pdf, "SAL-ORD-2026-01224", "pdf");
+ *   hw.on("rfid.tags", (d) => …);              // {tags: [{epc, tid, rssi}], ts}
+ *   hw.subscribe("rfid");
+ *   await hw.call("rfid.write_uri", { uri: "https://…/u/{tid}" }, 20000);
  *
  * Seiten, die die Bridge nur gelegentlich brauchen (Schnelldruck im Desk),
  * rufen nach dem ersten Fehlschlag standby(): dann wird nicht weiter
