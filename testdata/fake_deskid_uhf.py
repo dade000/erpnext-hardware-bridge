@@ -5,7 +5,9 @@
 
 Legt /tmp/rfid als Symlink auf das Slave-Ende an. Ein Tag liegt auf; nachgebaut
 ist nur, was der Treiber benutzt (ATE0, ATI, AT+BINV, AT+INVS, AT+PWR, AT+INV,
-AT+MSK, AT+READ, AT+WRT). 64 Byte Nutzerspeicher, anfangs leer.
+AT+MSK, AT+READ, AT+WRT). Speicher wie ein gelieferter EM4425: 32 Byte
+UHF-Nutzerspeicher ab 0, der NFC-Bereich (160 Byte) ab Adresse 320 (Wort A0h),
+dort steht schon eine Adresse, wie von einer Handy-App geschrieben.
 """
 import binascii, os, pty, sys, tty
 
@@ -22,7 +24,25 @@ print(f"DeskID-Simulator an {link} -> {name}", flush=True)
 
 TID = "E2801191A5030060A1B2C3D4"
 EPC = "3034257BF468D480000003EC"
-usr = bytearray(64)
+usr = bytearray(32)
+HF_START = 320
+hf = bytearray(160)
+_payload = b"\x04" + b"example.com/handy"  # 04 = "https://"
+_msg = bytes([0xD1, 0x01, len(_payload), ord("U")]) + _payload
+_tlv = bytes([0x03, len(_msg)]) + _msg + b"\xfe"
+_ndef = bytes([0xE1, 0x40, (len(_tlv) + 7) // 8, 0x00]) + _tlv
+hf[:len(_ndef)] = _ndef
+
+
+def region(s, n):
+    """(Puffer, Index) für [s, s+n) oder None."""
+    if 0 <= s and s + n <= len(usr):
+        return usr, s
+    if HF_START <= s and s + n <= HF_START + len(hf):
+        return hf, s - HF_START
+    return None
+
+
 echo = True
 invs = "0,1,0,0,0,ALL,DUAL,-100"
 buf = b""
@@ -58,13 +78,18 @@ while True:
         elif name_ == "AT+READ":
             _, s, n = arg.split(",")
             s, n = int(s), int(n)
-            out = [f"+READ: {EPC},OK,{binascii.hexlify(usr[s:s + n]).decode().upper()}" if s + n <= len(usr)
-                   else f"+READ: {EPC},MEMORY OVERRUN"]
+            if arg.startswith("TID"):
+                out = [f"+READ: {EPC},OK,{TID[2 * s:2 * (s + n)]}"]
+            else:
+                r = region(s, n)
+                out = [f"+READ: {EPC},OK,{binascii.hexlify(r[0][r[1]:r[1] + n]).decode().upper()}" if r
+                       else f"+READ: {EPC},MEMORY OVERRUN"]
         elif name_ == "AT+WRT":
             _, s, d = arg.split(",")
             s, d = int(s), binascii.unhexlify(d)
-            if s + len(d) <= len(usr):
-                usr[s:s + len(d)] = d
+            r = region(s, len(d))
+            if r:
+                r[0][r[1]:r[1] + len(d)] = d
                 out = [f"+WRT: {EPC},OK"]
             else:
                 out = [f"+WRT: {EPC},MEMORY OVERRUN"]

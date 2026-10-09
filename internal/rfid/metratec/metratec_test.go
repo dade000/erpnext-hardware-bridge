@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"slices"
@@ -207,8 +208,8 @@ func TestReadDumpFindsPhoneWrittenNDEF(t *testing.T) {
 	if ndef == nil || ndef["uri"] != "https://example.com/x" || ndef["offset"] != float64(8) {
 		t.Fatalf("Auszug %v", res)
 	}
-	if len(res["usr"].(string)) != 128 {
-		t.Fatalf("64 Byte Auszug erwartet: %v", res["usr"])
+	if b := region(res, 0)["bytes"]; b != float64(64) {
+		t.Fatalf("64 Byte Auszug erwartet: %v", res["regions"])
 	}
 }
 
@@ -222,7 +223,7 @@ func TestReadDumpHalvesOnSmallMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res["usr"].(string)) != 64 {
+	if region(res, 0)["bytes"] != float64(32) {
 		t.Fatalf("32 Byte Auszug erwartet: %v", res)
 	}
 }
@@ -348,11 +349,56 @@ func TestReadDumpWholeMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res["usr_bytes"] != float64(136) || res["usr_end"] == nil {
-		t.Fatalf("Größe/Ende: %v %v", res["usr_bytes"], res["usr_end"])
+	if r0 := region(res, 0); r0["bytes"] != float64(136) || r0["end"] == nil {
+		t.Fatalf("Größe/Ende: %v", r0)
 	}
 	ndef, _ := res["ndef"].(map[string]any)
 	if ndef == nil || ndef["offset"] != float64(72) {
 		t.Fatalf("NDEF %v", res["ndef"])
+	}
+}
+
+func region(res map[string]any, i int) map[string]any {
+	list, _ := res["regions"].([]any)
+	if i >= len(list) {
+		return map[string]any{}
+	}
+	return list[i].(map[string]any)
+}
+
+// EM4425 wie geliefert: 32 Byte UHF-Nutzerspeicher, der NFC-Bereich liegt in
+// derselben Bank ab Wort A0h. Ein Handy hat dort eine Adresse geschrieben.
+func TestEM4425NFCAreaAtWordA0(t *testing.T) {
+	for _, hfStart := range []int{320, 160} { // Byte- bzw. Wortadressierung
+		t.Run(fmt.Sprint(hfStart), func(t *testing.T) {
+			h := start(t, 0)
+			waitState(t, h.r, device.StateOnline)
+			tag := tagA()
+			tag.USR = make([]byte, 32)
+			tag.HF, tag.HFStart = make([]byte, 160), hfStart
+			phone, _ := metratec.EncodeType5URI("https://example.com/handy", false)
+			copy(tag.HF, phone)
+			h.fake.Put(tag)
+
+			res, err := call(t, h.r, "read", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ndef, _ := res["ndef"].(map[string]any)
+			if ndef == nil || ndef["offset"] != float64(hfStart) || ndef["uri"] != "https://example.com/handy" {
+				t.Fatalf("NDEF %v, Bereiche %v", res["ndef"], res["regions"])
+			}
+			if r1 := region(res, 1); r1["start"] != float64(hfStart) || r1["bytes"] != float64(160) {
+				t.Fatalf("NFC-Bereich %v", r1)
+			}
+
+			if _, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}", "offset": hfStart}); err != nil {
+				t.Fatal(err)
+			}
+			info, err := metratec.DecodeType5(tag.HF)
+			if err != nil || info.URI != "https://holzschuhe.at/u/"+tidA {
+				t.Fatalf("NFC-Bereich nach dem Schreiben: %+v %v", info, err)
+			}
+		})
 	}
 }

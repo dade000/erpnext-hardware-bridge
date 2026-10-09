@@ -909,3 +909,15 @@ obwohl ein Handy eine Adresse geschrieben hatte; »Testen« liest den
 Nutzerspeicher jetzt bis zu seinem Ende (höchstens 512 Byte) und meldet die
 lesbare Größe.
 
+Zweiter Test (2026-10-09): Mit voller TID las der Reader nur 32 Byte
+UHF-Nutzerspeicher, danach MEMORY OVERRUN, alles leer – obwohl ein Handy eine
+Adresse in den NFC-Teil geschrieben hatte. Hinweis aus
+stackoverflow.com/q/78100511 (Kommentar des Fragestellers): beim EM4425
+liegt der NFC-Nutzerspeicher in der UHF-Nutzerbank ab **Wort A0h**, nicht im
+Anschluss an den UHF-Bereich. »Testen« liest deshalb zusätzlich ab Adresse
+320 (A0h als Byteadresse, wie das SDK Adressen zählt) und, falls dort nichts
+lesbar ist, ab 160 (falls der Reader doch in Worten zählt). Die gefundene
+Startadresse kommt in die Photo Station Settings (»NFC-Bereich ab Byte«).
+Zählt der Reader tatsächlich in Worten, stimmt das stückweise Schreiben mit
+Byte-Schritten nicht – dann muss der Treiber nachgezogen werden.
+

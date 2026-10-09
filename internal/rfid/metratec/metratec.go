@@ -30,6 +30,8 @@ import (
 // Kind ist die Geräteklasse.
 const Kind = "rfid"
 
+var hfStarts = []int{320, 160}
+
 const (
 	cmdTimeout      = 2 * time.Second
 	invTimeout      = 4 * time.Second
@@ -47,7 +49,11 @@ const (
 	dumpLen = 32
 	// dumpMax: weiter liest der Test nicht. Der EM4425 hat 2048 bit
 	// Gesamtspeicher; 512 Byte decken jede Aufteilung ab.
-	dumpMax = 512
+	dumpMax = 256
+	// hfStarts: Startadressen, unter denen der NFC-Bereich des EM4425 in der
+	// UHF-Nutzerbank liegt (Wort A0h, als Byte- bzw. Wortadresse).
+	// hfMax: so viel wird dort höchstens gelesen.
+	hfMax = 256
 	// tidBytes: so lang ist eine eindeutige TID (96 bit, Gen2 mit XTID).
 	tidBytes = 12
 )
@@ -540,30 +546,31 @@ func (r *Reader) readDump(c *atConn) (any, error) {
 	} else {
 		tags[0].TID = full
 	}
-	// Stückweise lesen, bis der Speicher endet: wie groß der UHF-Nutzer-
-	// speicher ist, hängt von der Aufteilung des Chips ab und steht nirgends.
-	var mem []byte
-	var endErr error
+	// Bereich 1: der UHF-Nutzerspeicher ab 0, stückweise bis zu seinem Ende.
+	// Bereich 2: der NFC-Nutzerspeicher des EM4425. Er hängt nicht an den
+	// UHF-Bereich an, sondern liegt in derselben Speicherbank ab Wort A0h
+	// (Hinweis aus stackoverflow.com/q/78100511). Ob der Reader die
+	// Startadresse in Byte (320) oder in Worten (160) nimmt, sagt das SDK nicht
+	// verlässlich – beide werden versucht.
+	var regions []memRegion
 	err = r.withMask(c, full, func() error {
-		for off := 0; off < dumpMax; {
-			n := dumpLen
-			var part []byte
-			var rerr error
-			for ; n >= 2; n /= 2 {
-				part, rerr = r.readUSR(c, off, n)
-				if rerr == nil || fatal(rerr) {
-					break
-				}
+		reg, err := r.readRegion(c, 0, dumpMax)
+		if err != nil {
+			return err
+		}
+		regions = append(regions, reg)
+		for _, st := range hfStarts {
+			reg, err := r.readRegion(c, st, hfMax)
+			if err != nil {
+				return err
 			}
-			if fatal(rerr) {
-				return rerr
+			if len(reg.data) > 0 {
+				regions = append(regions, reg)
+				break
 			}
-			if rerr != nil {
-				endErr = rerr
-				return nil
+			if st == hfStarts[len(hfStarts)-1] {
+				regions = append(regions, reg)
 			}
-			mem = append(mem, part...)
-			off += n
 		}
 		return nil
 	})
@@ -571,23 +578,63 @@ func (r *Reader) readDump(c *atConn) (any, error) {
 		return nil, err
 	}
 	if err != nil {
-		endErr = err
+		out["usr_error"] = err.Error()
+		return out, nil
 	}
-	out["usr"] = strings.ToUpper(hex.EncodeToString(mem))
-	out["usr_bytes"] = len(mem)
-	if endErr != nil {
-		if len(mem) == 0 {
-			out["usr_error"] = endErr.Error()
-			return out, nil
+	var list []map[string]any
+	for _, reg := range regions {
+		m := map[string]any{"start": reg.start, "bytes": len(reg.data), "hex": strings.ToUpper(hex.EncodeToString(reg.data))}
+		if reg.end != nil {
+			m["end"] = reg.end.Error()
 		}
-		out["usr_end"] = endErr.Error()
+		list = append(list, m)
+		if _, found := out["ndef"]; found || len(reg.data) == 0 {
+			continue
+		}
+		if info, nerr := FindType5(reg.data); nerr == nil {
+			info.Offset += reg.start
+			out["ndef"] = info
+		}
 	}
-	if info, nerr := FindType5(mem); nerr == nil {
-		out["ndef"] = info
-	} else {
-		out["ndef_error"] = nerr.Error()
+	out["regions"] = list
+	if _, found := out["ndef"]; !found {
+		out["ndef_error"] = "keine Adresse in den gelesenen Bereichen"
 	}
 	return out, nil
+}
+
+// memRegion ist ein zusammenhängend lesbarer Teil des Nutzerspeichers.
+type memRegion struct {
+	start int
+	data  []byte
+	end   error // warum danach nicht weitergelesen wurde
+}
+
+// readRegion liest ab start stückweise, bis der Speicher endet oder max Byte
+// gelesen sind. Nur Portfehler kommen als Fehler zurück.
+func (r *Reader) readRegion(c *atConn, start, max int) (memRegion, error) {
+	reg := memRegion{start: start}
+	for off := start; off < start+max; {
+		n := dumpLen
+		var part []byte
+		var err error
+		for ; n >= 2; n /= 2 {
+			part, err = r.readUSR(c, off, n)
+			if err == nil || fatal(err) {
+				break
+			}
+		}
+		if fatal(err) {
+			return reg, err
+		}
+		if err != nil {
+			reg.end = err
+			return reg, nil
+		}
+		reg.data = append(reg.data, part...)
+		off += n
+	}
+	return reg, nil
 }
 
 type writeParams struct {

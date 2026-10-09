@@ -20,6 +20,10 @@ type Tag struct {
 	EPC string
 	TID string
 	USR []byte
+	// HF ist der NFC-Nutzerspeicher, über UHF ab HFStart erreichbar (EM4425:
+	// Wort A0h). Zwischen USR-Ende und HFStart: MEMORY OVERRUN.
+	HF      []byte
+	HFStart int
 	// FailWrite: Antwort statt OK auf Schreibbefehle (z.B. "ACCESS ERROR").
 	FailWrite string
 }
@@ -64,6 +68,17 @@ func (r *Reader) Commands() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.cmds...)
+}
+
+// mem liefert den Speicher, in dem [start, start+n) liegt, samt Index.
+func (t *Tag) mem(start, n int) ([]byte, int, bool) {
+	if start >= 0 && start+n <= len(t.USR) {
+		return t.USR, start, true
+	}
+	if t.HF != nil && start >= t.HFStart && start+n <= t.HFStart+len(t.HF) {
+		return t.HF, start - t.HFStart, true
+	}
+	return nil, 0, false
 }
 
 // Open liefert einen Port, der mit diesem Reader spricht.
@@ -189,11 +204,12 @@ func (r *Reader) answer(cmd string) []byte {
 		}
 		var lines []string
 		for _, t := range tags {
-			if start+n > len(t.USR) {
+			m, i, ok := t.mem(start, n)
+			if !ok {
 				lines = append(lines, "+READ: "+t.EPC+",MEMORY OVERRUN")
 				continue
 			}
-			lines = append(lines, "+READ: "+t.EPC+",OK,"+strings.ToUpper(hex.EncodeToString(t.USR[start:start+n])))
+			lines = append(lines, "+READ: "+t.EPC+",OK,"+strings.ToUpper(hex.EncodeToString(m[i:i+n])))
 		}
 		return ok(lines...)
 	case "AT+WRT":
@@ -215,10 +231,13 @@ func (r *Reader) answer(cmd string) []byte {
 			switch {
 			case t.FailWrite != "":
 				lines = append(lines, "+WRT: "+t.EPC+","+t.FailWrite)
-			case start+len(data) > len(t.USR):
-				lines = append(lines, "+WRT: "+t.EPC+",MEMORY OVERRUN")
 			default:
-				copy(t.USR[start:], data)
+				m, i, ok := t.mem(start, len(data))
+				if !ok {
+					lines = append(lines, "+WRT: "+t.EPC+",MEMORY OVERRUN")
+					continue
+				}
+				copy(m[i:], data)
 				lines = append(lines, "+WRT: "+t.EPC+",OK")
 			}
 		}
