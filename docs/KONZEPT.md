@@ -959,3 +959,10 @@ merken, danach zurückstellen) und liest zur Kontrolle blockweise; Erkennen
 und Lesen bleiben bei der eingestellten niedrigen Leistung. Der Simulator
 verfälscht unter 9 dBm genau diese Bits.
 
+Zehnter Befund: Die Fotostation zeigte zeitweise „2 Tags am Reader“ bei einem
+Tag – der DeskID meldet denselben Tag in einer Runde gelegentlich doppelt.
+Inventory-Zeilen mit gleichem EPC werden zusammengeführt. Offen: ob die
+Dauerabfrage (alle 400 ms, je offener Seite) Tags über die Session-Flags
+zeitweise verstummen lässt („geht weg“) und mit dem fehlerhaften Schreiben
+in den NFC-Bereich zusammenhängt.
+

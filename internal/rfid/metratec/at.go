@@ -167,7 +167,28 @@ func parseInventory(lines []string) ([]Tag, error) {
 		}
 		tags = append(tags, t)
 	}
-	return tags, nil
+	return dedupe(tags), nil
+}
+
+// dedupe führt Mehrfachmeldungen desselben Tags zusammen (gleicher EPC):
+// der DeskID meldet einen Tag in einer Runde gelegentlich zweimal, die
+// Fotostation zeigte dann "2 Tags am Reader". Behalten wird die Meldung mit
+// TID, bei Gleichstand die stärkere.
+func dedupe(tags []Tag) []Tag {
+	out := tags[:0]
+	idx := map[string]int{}
+	for _, t := range tags {
+		i, seen := idx[t.EPC]
+		switch {
+		case !seen:
+			idx[t.EPC] = len(out)
+			out = append(out, t)
+		case out[i].TID == "" && t.TID != "",
+			len(t.TID) == len(out[i].TID) && t.RSSI > out[i].RSSI:
+			out[i] = t
+		}
+	}
+	return out
 }
 
 // tagResult ist eine Zeile wie "+WRT: <EPC>,OK" oder "+READ: <EPC>,OK,<hex>".

@@ -92,3 +92,18 @@ func TestInvSettingsKeepsTail(t *testing.T) {
 		t.Fatalf("%q %v", got, err)
 	}
 }
+
+func TestInventoryDuplicatesMerged(t *testing.T) {
+	tags, err := parseInventory([]string{
+		"+INV: E280B11720007801144BEC88,E280B11720007801,-34",
+		"+INV: E280B11720007801144BEC88,E280B11720007801,-30",
+		"+INV: 3034257BF468D480000003ED,,-60",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tags) != 2 || tags[0].RSSI != -30 {
+		t.Fatalf("%+v", tags)
+	}
+}
+
