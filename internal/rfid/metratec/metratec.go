@@ -40,10 +40,11 @@ const (
 	maxTimeouts     = 3               // danach Port neu öffnen
 	maxBackoff      = 5 * time.Second
 	requestDeadline = 30 * time.Second
-	// writeChunk: so viele Bytes je AT+WRT. Die Obergrenze des Readers steht
-	// nicht im SDK; 16 Byte sind sicher klein und kosten nur ein paar
-	// Funkbefehle mehr.
-	writeChunk = 16
+	// writeChunk: so viele Bytes je AT+WRT – genau ein NFC-Block des EM4425.
+	// Am echten Tag zerstörten 16 Byte je Befehl (und halbe Blöcke) den
+	// NFC-Bereich: einzelne Bits falsch oder ERROR beim Lesen. Ganze 4-Byte-
+	// Blöcke an 4-Byte-Grenzen kamen exakt zurück.
+	writeChunk = 4
 	// dumpLen: so viel Nutzerspeicher liest der Test je Befehl; am Ende des
 	// Speichers wird halbiert, bis nichts mehr geht.
 	dumpLen = 32
@@ -555,23 +556,38 @@ func (r *Reader) tagCommand(c *atConn, cmd, prefix string) (tagResult, error) {
 		if err != nil {
 			return tagResult{}, err
 		}
-		res := parseTagResults(lines, prefix)
+		res := worst(parseTagResults(lines, prefix))
 		switch {
-		case len(res) > 0 && (res[0].Status == "OK" || !retryable(res[0].Status)):
-			return res[0], nil
-		case try >= tagRetries && len(res) > 0:
-			return res[0], nil
+		case res != nil && (res.Status == "OK" || !retryable(res.Status)):
+			return *res, nil
+		case try >= tagRetries && res != nil:
+			return *res, nil
 		case try >= tagRetries:
 			return tagResult{}, device.Errf("no_tag", fmt.Sprintf("Tag hat auf %s %d-mal nicht geantwortet – bitte ruhig auflegen und nochmal.", cmd, tagRetries))
 		}
 		status := "keine Antwort"
-		if len(res) > 0 {
-			status = res[0].Status
+		if res != nil {
+			status = res.Status
 		}
 		r.log.Info("Tag-Befehl wird wiederholt", "cmd", cmd, "try", try, "status", status)
 		// Nach einem Schreibvorgang braucht das EEPROM des Chips einen Moment.
 		time.Sleep(time.Duration(30*try) * time.Millisecond)
 	}
+}
+
+// worst fasst die Antwortzeilen zusammen: der DeskID meldet beim Schreiben
+// je Wort eine Zeile ("+WRT: <EPC>,OK" zweimal für 4 Byte). Gilt nur, wenn
+// alle OK sind; sonst die erste mit Fehler. nil = keine Antwort.
+func worst(res []tagResult) *tagResult {
+	if len(res) == 0 {
+		return nil
+	}
+	for i := range res {
+		if res[i].Status != "OK" {
+			return &res[i]
+		}
+	}
+	return &res[0]
 }
 
 // retryable: Antworten eines Tags, bei denen ein zweiter Versuch helfen kann.
@@ -757,8 +773,8 @@ func (r *Reader) writeURI(c *atConn, p writeParams) (any, error) {
 	if !strings.Contains(p.URI, "://") {
 		return nil, device.Errf("bad_request", "uri fehlt oder ist keine Adresse")
 	}
-	if p.Offset < 0 || p.Offset%2 != 0 || p.Offset > 1024 {
-		return nil, device.Errf("bad_request", "offset muss eine gerade Zahl zwischen 0 und 1024 sein")
+	if p.Offset < 0 || p.Offset%writeChunk != 0 || p.Offset > 1024 {
+		return nil, device.Errf("bad_request", "offset muss durch 4 teilbar sein (NFC-Blockgrenze) und zwischen 0 und 1024 liegen")
 	}
 	readOnly := p.ReadOnly == nil || *p.ReadOnly
 	tag, err := r.single(c)

@@ -24,6 +24,11 @@ type Tag struct {
 	// Wort A0h). Zwischen USR-Ende und HFStart: MEMORY OVERRUN.
 	HF      []byte
 	HFStart int
+	// HFBlocks: der NFC-Bereich verhält sich wie am echten EM4425 – nur ganze
+	// 4-Byte-Blöcke lassen sich schreiben; alles andere beschädigt die
+	// betroffenen Blöcke, Lesen darüber gibt ERROR.
+	HFBlocks bool
+	bad      map[int]bool // beschädigte Blöcke (Index im HF-Bereich / 4)
 	// FailWrite: Antwort statt OK auf Schreibbefehle (z.B. "ACCESS ERROR").
 	FailWrite string
 }
@@ -233,6 +238,16 @@ func (r *Reader) answer(cmd string) []byte {
 				lines = append(lines, "+READ: "+t.EPC+",MEMORY OVERRUN")
 				continue
 			}
+			if t.HFBlocks && start >= t.HFStart && t.bad != nil {
+				broken := false
+				for b := i / 4; b <= (i+n-1)/4; b++ {
+					broken = broken || t.bad[b]
+				}
+				if broken {
+					lines = append(lines, "+READ: "+t.EPC+",ERROR")
+					continue
+				}
+			}
 			lines = append(lines, "+READ: "+t.EPC+",OK,"+strings.ToUpper(hex.EncodeToString(m[i:i+n])))
 		}
 		return ok(lines...)
@@ -262,7 +277,18 @@ func (r *Reader) answer(cmd string) []byte {
 					continue
 				}
 				copy(m[i:], data)
-				lines = append(lines, "+WRT: "+t.EPC+",OK")
+				if t.HFBlocks && t.HF != nil && start >= t.HFStart {
+					if t.bad == nil {
+						t.bad = map[int]bool{}
+					}
+					for b := i / 4; b <= (i+len(data)-1)/4; b++ {
+						t.bad[b] = !(len(data) == 4 && i%4 == 0)
+					}
+				}
+				// Je Wort eine Zeile, wie der echte DeskID.
+				for w := 0; w < (len(data)+1)/2; w++ {
+					lines = append(lines, "+WRT: "+t.EPC+",OK")
+				}
 			}
 		}
 		return ok(lines...)

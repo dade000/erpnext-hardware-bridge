@@ -941,3 +941,12 @@ Speicherende und Zugriffsfehler), mit kurzer Pause, falls das EEPROM nach dem
 Schreiben noch beschäftigt ist. Bei Log-Level `debug` schneidet der Treiber
 jeden AT-Befehl und jede Antwortzeile mit (ohne die Dauerabfrage).
 
+Achter Test (AT-Konsole): Der NFC-Bereich des EM4425 will ganze 4-Byte-Blöcke.
+16 Byte je `AT+WRT` kamen mit einzelnen falschen Bits zurück (immer Byte 5 und
+9 des Stücks, Bit 0x02) oder machten den Block unlesbar (`ERROR`); ein halber
+Block (2 Byte) ebenso. Je 4 Byte an einer 4-Byte-Grenze kamen exakt zurück.
+Das erklärt alle vorherigen Befunde (Handy sah nichts, Lesen ab 320 ERROR).
+Die Bridge schreibt deshalb in 4-Byte-Blöcken, `offset` muss durch 4 teilbar
+sein; der DeskID meldet je geschriebenem Wort eine `+WRT`-Zeile, alle müssen
+OK sein. Der Simulator bildet das Blockverhalten nach (`HFBlocks`).
+

@@ -375,7 +375,7 @@ func TestEM4425NFCAreaAtWordA0(t *testing.T) {
 			waitState(t, h.r, device.StateOnline)
 			tag := tagA()
 			tag.USR = make([]byte, 32)
-			tag.HF, tag.HFStart = make([]byte, 160), hfStart
+			tag.HF, tag.HFStart, tag.HFBlocks = make([]byte, 160), hfStart, true
 			phone, _ := metratec.EncodeType5URI("https://example.com/handy", false)
 			copy(tag.HF, phone)
 			h.fake.Put(tag)
@@ -412,7 +412,7 @@ func TestRadioDropoutsAreRetried(t *testing.T) {
 	waitState(t, h.r, device.StateOnline)
 	tag := tagA()
 	tag.USR = make([]byte, 32)
-	tag.HF, tag.HFStart = make([]byte, 184), 320
+	tag.HF, tag.HFStart, tag.HFBlocks = make([]byte, 184), 320, true
 	h.fake.Put(tag)
 
 	h.fake.Miss(2) // TID-Nachlesen
@@ -437,7 +437,7 @@ func TestExistingCapabilityContainerIsKept(t *testing.T) {
 	waitState(t, h.r, device.StateOnline)
 	tag := tagA()
 	tag.USR = make([]byte, 32)
-	tag.HF, tag.HFStart = make([]byte, 184), 320
+	tag.HF, tag.HFStart, tag.HFBlocks = make([]byte, 184), 320, true
 	copy(tag.HF, []byte{0xE1, 0x40, 0x17, 0x09, 0x03, 0x12})
 	h.fake.Put(tag)
 	if _, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}", "offset": 320}); err != nil {
@@ -458,7 +458,7 @@ func TestTagErrorStatusIsRetried(t *testing.T) {
 	waitState(t, h.r, device.StateOnline)
 	tag := tagA()
 	tag.USR = make([]byte, 32)
-	tag.HF, tag.HFStart = make([]byte, 184), 320
+	tag.HF, tag.HFStart, tag.HFBlocks = make([]byte, 184), 320, true
 	h.fake.Put(tag)
 	h.fake.FailReads(2)
 	if _, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}", "offset": 320}); err != nil {
@@ -493,5 +493,14 @@ func TestRawConsole(t *testing.T) {
 	}
 	if _, err := h.r.Handle(context.Background(), "raw", nil); code(err) != "unknown_method" {
 		t.Fatalf("raw über Handle: %v", err)
+	}
+}
+
+func TestOffsetMustBeBlockAligned(t *testing.T) {
+	h := start(t, 0)
+	waitState(t, h.r, device.StateOnline)
+	h.fake.Put(tagA())
+	if _, err := call(t, h.r, "write_uri", map[string]any{"uri": "https://holzschuhe.at/u/{tid}", "offset": 322}); code(err) != "bad_request" {
+		t.Fatalf("Offset 322: %v", err)
 	}
 }
