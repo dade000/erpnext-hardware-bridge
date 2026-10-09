@@ -106,4 +106,3 @@ func TestInventoryDuplicatesMerged(t *testing.T) {
 		t.Fatalf("%+v", tags)
 	}
 }
-
