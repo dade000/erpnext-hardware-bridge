@@ -541,3 +541,26 @@ func maskClearedLast(cmds []string) bool {
 	}
 	return set >= 0 && off > set
 }
+
+func TestReadTID(t *testing.T) {
+	h := start(t, 0)
+	h.fake.OldFirmware(true) // Inventory liefert nur 8 Byte
+	waitState(t, h.r, device.StateOnline)
+	if _, err := call(t, h.r, "read_tid", nil); code(err) != "no_tag" {
+		t.Fatalf("ohne Tag: %v", err)
+	}
+	tag := tagA()
+	h.fake.Put(tag)
+	res, err := call(t, h.r, "read_tid", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["tid"] != tidA {
+		t.Fatalf("TID %v", res["tid"])
+	}
+	for _, c := range h.fake.Commands() {
+		if strings.HasPrefix(c, "AT+WRT") {
+			t.Fatalf("read_tid darf nicht schreiben: %s", c)
+		}
+	}
+}

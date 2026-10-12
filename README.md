@@ -158,7 +158,7 @@ an den Parcel-Station-PC hängen und dort die Bridge installieren.
 Methoden: `hello`, `devices.list`, `bridge.info`, `scale.subscribe`,
 `scale.unsubscribe`, `scale.read`, `scale.tare`, `printer.print`,
 `printer.test`, `rfid.subscribe`, `rfid.unsubscribe`, `rfid.inventory`,
-`rfid.read`, `rfid.write_uri`. Fehlercodes: `device_missing`, `scale_offline`, `timeout`,
+`rfid.read`, `rfid.read_tid`, `rfid.write_uri`. Fehlercodes: `device_missing`, `scale_offline`, `timeout`,
 `bad_response`, `busy`, `unauthorized`, `protocol_mismatch`,
 `unknown_method`, `unsupported_format`, `print_failed`, `too_large`,
 `bad_request`, `unexpected`, `rfid_offline`, `no_tag`, `multiple_tags`,
@@ -175,6 +175,8 @@ Methoden: `hello`, `devices.list`, `bridge.info`, `scale.subscribe`,
 ```
 
 `rfid.tags` kommt nur bei Änderungen (Tag aufgelegt/weggenommen).
+`read_tid` verlangt genau einen Tag und liefert seine volle TID (12 Byte, bei
+Bedarf nachgelesen), ohne zu schreiben.
 `write_uri` verlangt genau einen Tag mit lesbarer TID, ersetzt `{tid}`,
 schreibt einen NFC-Type-5-Inhalt (Capability Container + URI-Record) ab
 `offset` in den UHF-Nutzerspeicher und liest zur Kontrolle zurück.

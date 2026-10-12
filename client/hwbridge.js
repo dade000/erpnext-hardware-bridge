@@ -26,6 +26,7 @@
  *   await hw.print(null, base64Pdf, "SAL-ORD-2026-01224", "pdf");
  *   hw.on("rfid.tags", (d) => …);              // {tags: [{epc, tid, rssi}], ts}
  *   hw.subscribe("rfid");
+ *   await hw.call("rfid.read_tid", {}, 15000);    // {tid, epc, rssi}
  *   await hw.call("rfid.write_uri", { uri: "https://…/u/{tid}" }, 20000);
  *
  * Seiten, die die Bridge nur gelegentlich brauchen (Schnelldruck im Desk),

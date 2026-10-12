@@ -164,11 +164,11 @@ func (r *Reader) AddDemand(delta int) {
 	}
 }
 
-// Handle: read (Inventory, bei genau einem Tag mit Speicherauszug) und
-// write_uri.
+// Handle: read (Inventory, bei genau einem Tag mit Speicherauszug),
+// inventory, read_tid (genau ein Tag, volle TID) und write_uri.
 func (r *Reader) Handle(ctx context.Context, cmd string, params json.RawMessage) (any, error) {
 	switch cmd {
-	case "read", "inventory", "write_uri":
+	case "read", "inventory", "read_tid", "write_uri":
 	default:
 		return nil, device.Errf("unknown_method", "rfid."+cmd+" gibt es nicht")
 	}
@@ -436,6 +436,15 @@ func (r *Reader) do(c *atConn, q request) (any, error) {
 		return map[string]any{"tags": tags}, nil
 	case "read":
 		return r.readDump(c)
+	case "read_tid":
+		// Genau ein Tag, volle TID – ohne etwas zu schreiben. So verknüpft die
+		// Fotostation den Tag mit dem Unikat, solange das Beschreiben des
+		// NFC-Teils über UHF nicht verlässlich ist.
+		tag, err := r.single(c)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"tid": tag.TID, "epc": tag.EPC, "rssi": tag.RSSI}, nil
 	case "write_uri":
 		var p writeParams
 		if len(q.params) > 0 {
