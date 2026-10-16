@@ -966,3 +966,55 @@ Dauerabfrage (alle 400 ms, je offener Seite) Tags über die Session-Flags
 zeitweise verstummen lässt („geht weg“) und mit dem fehlerhaften Schreiben
 in den NFC-Bereich zusammenhängt.
 
+
+
+## 23. Kamera (2026-10-16)
+
+Gebaut für die Photo Station am Raspberry Pi (Openbox + Chromium, Canon EOS).
+Abweichungen von Abschnitt 10:
+
+* **Kein cgo.** libgphoto2 wird mit `purego` zur Laufzeit geladen
+  (`internal/camera/gphoto`, nur Linux). Das Release bleibt `CGO_ENABLED=0`
+  für alle Ziele, auch `linux/arm`; ohne libgphoto2 meldet das Gerät „libgphoto2
+  nicht gefunden“, der Rest der Bridge läuft. Ein Build-Tag `camera` gibt es nicht.
+* **Ein Thread.** Alle Aufrufe an libgphoto2 laufen in der Run-Goroutine des
+  Treibers, die an ihren OS-Thread gebunden ist (`runtime.LockOSThread`).
+* **Live-Bild.** `camera.subscribe` zählt Zuschauer; solange es welche gibt,
+  holt der Treiber im Takt `live_fps` (Vorgabe 15) `capture_preview` und
+  verteilt `camera.frame`. Ohne Zuschauer bleibt das Live-Bild der Kamera
+  `live_hold_s` (Vorgabe 30 s) an, damit es nach dem Speichern sofort
+  weiterläuft, dann `viewfinder=0` (Spiegel runter). Die Photo Station meldet
+  das Live-Bild nach der Aufnahme ab und nach dem Speichern wieder an.
+* **Binärframes.** Bilder gehen nicht als Base64: 4 Byte Kopf-Länge (Big
+  Endian), der Kopf als JSON wie ein Textframe (`res` mit Meta als `result`
+  bzw. `event` mit Meta als `data`), dann die Nutzlast. `hwbridge.js` hängt sie
+  als `blob` an. Live-Bilder laufen pro Verbindung über ein Fach, das nur das
+  neueste Bild hält: liest der Browser langsamer, fallen Bilder weg, statt sich
+  zu stauen.
+* **Aufnahme.** Beim Verbinden `capturetarget=Internal RAM` und, falls
+  konfiguriert, `imageformat=<image_format>`. `gp_camera_capture`; liefert die
+  Kamera zuerst RAW, wartet der Treiber bis 3 s auf das JPEG (RAW+JPEG); ohne
+  JPEG Fehler `not_jpeg` statt still das Vorschaubild. Die Dateien im RAM der
+  Kamera werden danach gelöscht.
+* **Sitzung.** Fehlercodes `-7`, `-31…-60`, `-52`, `-53`, `-105`, `-114` heißen
+  „Sitzung weg“: schließen, mit Backoff neu öffnen; eine Anfrage im Zustand
+  offline löst sofort einen Versuch aus. `-53` (belegt) nennt die Flask-App als
+  wahrscheinliche Ursache. Akkustand (`batterylevel`) alle 30 s als Lebenszeichen.
+* **Kommandos.** `camera.capture` (Binär), `camera.preview` (Binär),
+  `camera.focus` (`autofocusdrive=1`), `camera.reset`, `camera.test` (Modell,
+  Akku, Bildqualität mit Auswahl, Live-Bild als Data-URL für die Oberfläche).
+* **HTTP-Kompat.** Mit eingerichteter Kamera beantwortet die Bridge `/shot`
+  (`?preview=1`), `/health` (200/503 im Flask-Format) und `/reset` selbst
+  (`http_compat.camera_device`, leer = erste Kamera); sonst wie bisher an
+  `legacy_upstream`.
+* **Simulator.** Treiber `camera/simulator` liefert ein bewegtes Testbild und
+  kennt die Canon-Einstellungen, für Tests und zum Ausprobieren der Station.
+* **Rechte.** udev-Regel `ENV{ID_GPHOTO2}=="1", GROUP="plugdev"`, der
+  Dienstbenutzer ist in `plugdev`.
+
+Geprüft: Anbindung gegen libgphoto2 2.5.31 ohne Kamera (lädt, Fehler -105
+richtig übersetzt), Unit-Tests mit nachgebautem Backend (Live nur mit
+Zuschauern, Sucher aus nach Haltezeit, Wiederverbinden), WS- und Kompat-Tests
+mit dem Simulator, Photo Station auf Dev mit Simulator und Chromium bis zum
+angelegten Unikat. Offen: echte Canon (Live-Bildrate, Fokus, Aufnahme im
+Live-Bild, Auto-Abschaltung), 32-Bit-Pi (purego Tier 2).

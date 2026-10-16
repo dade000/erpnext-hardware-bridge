@@ -173,3 +173,12 @@ func stateData(s Status) map[string]any {
 func StateEvent(s Status) Event {
 	return Event{Name: "device.state", Device: s.ID, Data: stateData(s)}
 }
+
+// Binary ist ein Ergebnis oder Event-Datum mit Nutzlast (z.B. ein JPEG der
+// Kamera). Die WebSocket-API schickt es als Binärframe: 4 Byte Länge (Big
+// Endian), danach die Nachricht als JSON wie bei Textframes, mit Meta als
+// result bzw. data, danach die Nutzlast. So braucht kein Bild Base64.
+type Binary struct {
+	Meta map[string]any
+	Data []byte
+}

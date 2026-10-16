@@ -85,6 +85,14 @@ type DeviceConfig struct {
 	// Zahlungsterminals), LocalPort der Port auf 127.0.0.1/::1, den die Kasse
 	// als Terminal-Adresse benutzt.
 	LocalPort int `yaml:"local_port,omitempty" json:"local_port,omitempty"`
+
+	// Kamera: Bildqualität, die beim Verbinden gesetzt wird (Text wie in der
+	// Kamera, z.B. "Small Fine JPEG"; leer = an der Kamera eingestellt),
+	// Bilder pro Sekunde im Live-Bild und wie lange das Live-Bild der Kamera
+	// ohne Zuschauer weiterläuft, bevor der Spiegel runtergeht.
+	ImageFormat string `yaml:"image_format,omitempty" json:"image_format,omitempty"`
+	LiveFPS     int    `yaml:"live_fps,omitempty" json:"live_fps,omitempty"`
+	LiveHoldS   int    `yaml:"live_hold_s,omitempty" json:"live_hold_s,omitempty"`
 }
 
 // PortSpec wählt einen seriellen Port entweder über den Pfad oder über
@@ -133,6 +141,9 @@ type HTTPCompat struct {
 	BasicAuth BasicAuth `yaml:"basic_auth,omitempty" json:"basic_auth"`
 	// ScaleDevice wählt die Waage für /weight; leer = erste Waage.
 	ScaleDevice string `yaml:"scale_device,omitempty" json:"scale_device,omitempty"`
+	// CameraDevice wählt die Kamera für /shot, /health und /reset; leer =
+	// erste Kamera. Ohne Kamera gehen diese Pfade an legacy_upstream.
+	CameraDevice string `yaml:"camera_device,omitempty" json:"camera_device,omitempty"`
 	// LegacyUpstream: alles außer /weight wird dorthin weitergereicht,
 	// z.B. an die Flask-App für /shot und /health, bis die Kamera portiert ist.
 	LegacyUpstream string `yaml:"legacy_upstream,omitempty" json:"legacy_upstream,omitempty"`
@@ -323,6 +334,14 @@ func (c *Config) Validate() error {
 				localPorts[d.LocalPort] = d.ID
 			}
 		}
+		if d.Kind == "camera" {
+			if d.LiveFPS < 0 || d.LiveFPS > 30 {
+				errs = append(errs, fmt.Errorf("%s: live_fps muss zwischen 1 und 30 liegen (0 = Vorgabe 15)", where))
+			}
+			if d.LiveHoldS < 0 || d.LiveHoldS > 600 {
+				errs = append(errs, fmt.Errorf("%s: live_hold_s muss zwischen 0 und 600 liegen", where))
+			}
+		}
 		if d.Kind == "scale" {
 			if d.PollMS < 50 || d.PollMS > 10_000 {
 				errs = append(errs, fmt.Errorf("%s: poll_ms muss zwischen 50 und 10000 liegen", where))
@@ -357,6 +376,9 @@ func (c *Config) Validate() error {
 		}
 		if h.ScaleDevice != "" && !seen[h.ScaleDevice] {
 			errs = append(errs, fmt.Errorf("http_compat.scale_device %q gibt es nicht", h.ScaleDevice))
+		}
+		if h.CameraDevice != "" && !seen[h.CameraDevice] {
+			errs = append(errs, fmt.Errorf("http_compat.camera_device %q gibt es nicht", h.CameraDevice))
 		}
 	}
 	return errors.Join(errs...)

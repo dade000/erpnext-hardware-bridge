@@ -28,6 +28,13 @@
  *   hw.subscribe("rfid");
  *   await hw.call("rfid.read_tid", {}, 15000);    // {tid, epc, rssi}
  *   await hw.call("rfid.write_uri", { uri: "https://…/u/{tid}" }, 20000);
+ *   hw.on("camera.frame", (f) => …);            // {seq, blob} – Live-Bild, nur mit subscribe("camera")
+ *   hw.subscribe("camera");                    // Live-Bild an (Abmeldefunktion = aus)
+ *   const shot = await hw.capture();           // {blob, width, height, bytes, ms}
+ *
+ * Bilder kommen als Binärframe (kein Base64): 4 Byte Länge des JSON-Kopfs,
+ * der Kopf wie eine normale Nachricht, danach die Nutzlast. Der Client hängt
+ * die Nutzlast als Blob an result bzw. an die Event-Daten (Feld blob).
  *
  * Seiten, die die Bridge nur gelegentlich brauchen (Schnelldruck im Desk),
  * rufen nach dem ersten Fehlschlag standby(): dann wird nicht weiter
@@ -43,6 +50,8 @@
 	// Ein Druckauftrag darf länger dauern als eine Messung: die Bridge wartet
 	// selbst bis zu 20 s auf den Drucker.
 	var PRINT_TIMEOUT_MS = 25000;
+	// Auslösen inkl. Fokus und Übertragung des Fotos von der Kamera.
+	var CAPTURE_TIMEOUT_MS = 30000;
 	var BACKOFF_MS = [1000, 2000, 5000, 10000, 30000];
 
 	function HardwareBridge(opts) {
@@ -161,6 +170,7 @@
 			this._fail(String(e));
 			return;
 		}
+		ws.binaryType = "arraybuffer";
 		this._ws = ws;
 		var opened = false;
 		var guard = setTimeout(function () {
@@ -189,7 +199,9 @@
 		};
 		ws.onmessage = function (ev) {
 			var m;
-			try { m = JSON.parse(ev.data); } catch (e) { return; }
+			try {
+				m = typeof ev.data === "string" ? JSON.parse(ev.data) : decodeBinary(ev.data);
+			} catch (e) { return; }
 			if (m.type === "res") {
 				var cb = self._pending[m.id];
 				if (cb) {
@@ -242,6 +254,17 @@
 			if (!opened) end();
 		};
 	};
+
+	// Binärframe → Nachricht mit Blob (an result bzw. data).
+	function decodeBinary(buf) {
+		var n = new DataView(buf).getUint32(0);
+		var head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+		var meta = (head.type === "res" ? head.result : head.data) || {};
+		var blob = new Blob([buf.slice(4 + n)], { type: meta.mime || "application/octet-stream" });
+		if (head.type === "res") head.result = Object.assign({}, meta, { blob: blob });
+		else head.data = Object.assign({}, meta, { blob: blob });
+		return head;
+	}
 
 	P._fail = function (why) {
 		var self = this;
@@ -302,6 +325,14 @@
 		var params = { format: format || "zpl", data: data, title: title || "" };
 		if (device) params.device = device;
 		return this.call("printer.print", params, PRINT_TIMEOUT_MS);
+	};
+
+	/**
+	 * Foto mit der Kamera der Station. Liefert {blob, width, height, bytes, ms}.
+	 * device leer = erste Kamera.
+	 */
+	P.capture = function (device) {
+		return this.call("camera.capture", device ? { device: device } : {}, CAPTURE_TIMEOUT_MS);
 	};
 
 	/** Kommando senden. Liefert ein Promise; Fehler haben {code, message}. */

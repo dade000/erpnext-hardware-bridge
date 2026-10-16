@@ -5,6 +5,7 @@ package ws
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -100,7 +101,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		origin: origin,
 		remote: r.RemoteAddr,
 		since:  time.Now(),
-		out:    make(chan []byte, outBuffer),
+		out:    make(chan outMsg, outBuffer),
+		frames: map[string][]byte{},
+		frameC: make(chan struct{}, 1),
 		subs:   map[string]device.Device{},
 		log:    s.log.With("origin", origin),
 	}
@@ -139,6 +142,12 @@ type eventMsg struct {
 	Data   any    `json:"data"`
 }
 
+// outMsg ist ein fertig kodierter Frame.
+type outMsg struct {
+	typ websocket.MessageType
+	b   []byte
+}
+
 type helloParams struct {
 	Client   string `json:"client"`
 	Protocol int    `json:"protocol"`
@@ -159,7 +168,13 @@ type session struct {
 	remote string
 	since  time.Time
 	log    *slog.Logger
-	out    chan []byte
+	out    chan outMsg
+	// Live-Bilder laufen nicht durch out: pro Gerät zählt nur das neueste.
+	// Liest der Browser langsamer, als die Kamera liefert, fallen Bilder weg,
+	// statt sich zu stauen (sonst hinge das Live-Bild Sekunden hinterher).
+	frameMu sync.Mutex
+	frames  map[string][]byte
+	frameC  chan struct{}
 
 	mu     sync.Mutex
 	client string
@@ -261,7 +276,7 @@ func (ss *session) dispatch(ctx context.Context, method string, raw json.RawMess
 		return nil, device.Errf("bad_request", "hello nur einmal")
 	}
 	kind, cmd, ok := strings.Cut(method, ".")
-	if !ok || (kind != "scale" && kind != "printer" && kind != "rfid") {
+	if !ok || (kind != "scale" && kind != "printer" && kind != "rfid" && kind != "camera") {
 		return nil, device.Errf("unknown_method", method+" gibt es nicht")
 	}
 	var p deviceParams
@@ -357,12 +372,35 @@ func (ss *session) forward(ctx context.Context, events <-chan device.Event) {
 					continue
 				}
 			}
+			if bin, ok := ev.Data.(*device.Binary); ok {
+				b, err := encodeBinary(eventMsg{Type: "event", Event: ev.Name, Device: ev.Device, Data: bin.Meta}, bin.Data)
+				if err != nil {
+					continue
+				}
+				ss.frameMu.Lock()
+				ss.frames[ev.Device] = b
+				ss.frameMu.Unlock()
+				select {
+				case ss.frameC <- struct{}{}:
+				default:
+				}
+				continue
+			}
 			ss.send(eventMsg{Type: "event", Event: ev.Name, Device: ev.Device, Data: ev.Data})
 		}
 	}
 }
 
 func (ss *session) reply(id json.RawMessage, res any, err error) {
+	if bin, ok := res.(*device.Binary); ok && err == nil {
+		b, eerr := encodeBinary(resMsg{ID: id, Type: "res", OK: true, Result: bin.Meta}, bin.Data)
+		if eerr != nil {
+			err = eerr
+		} else {
+			ss.enqueue(outMsg{typ: websocket.MessageBinary, b: b})
+			return
+		}
+	}
 	if err == nil {
 		ss.send(resMsg{ID: id, Type: "res", OK: true, Result: res})
 		return
@@ -382,11 +420,46 @@ func (ss *session) send(v any) {
 		ss.log.Error("JSON-Kodierung", "err", err)
 		return
 	}
+	ss.enqueue(outMsg{typ: websocket.MessageText, b: b})
+}
+
+func (ss *session) enqueue(m outMsg) {
 	select {
-	case ss.out <- b:
+	case ss.out <- m:
 	default:
 		ss.log.Warn("Ausgangspuffer voll, Nachricht verworfen", "client", ss.client)
 	}
+}
+
+// encodeBinary baut einen Binärframe: 4 Byte Länge des JSON-Kopfs (Big
+// Endian), der Kopf (dieselbe Nachricht wie als Textframe), die Nutzlast.
+func encodeBinary(head any, data []byte) ([]byte, error) {
+	h, err := json.Marshal(head)
+	if err != nil {
+		return nil, err
+	}
+	b := make([]byte, 4+len(h)+len(data))
+	binary.BigEndian.PutUint32(b, uint32(len(h)))
+	copy(b[4:], h)
+	copy(b[4+len(h):], data)
+	return b, nil
+}
+
+// nextFrame nimmt ein wartendes Live-Bild aus dem Fach.
+func (ss *session) nextFrame() []byte {
+	ss.frameMu.Lock()
+	defer ss.frameMu.Unlock()
+	for id, b := range ss.frames {
+		delete(ss.frames, id)
+		if len(ss.frames) > 0 {
+			select {
+			case ss.frameC <- struct{}{}:
+			default:
+			}
+		}
+		return b
+	}
+	return nil
 }
 
 func (ss *session) writer(ctx context.Context, cancel context.CancelFunc) {
@@ -394,16 +467,24 @@ func (ss *session) writer(ctx context.Context, cancel context.CancelFunc) {
 		select {
 		case <-ctx.Done():
 			return
-		case b := <-ss.out:
-			wctx, c := context.WithTimeout(ctx, 5*time.Second)
-			err := ss.conn.Write(wctx, websocket.MessageText, b)
-			c()
-			if err != nil {
+		case m := <-ss.out:
+			if !ss.write(ctx, m.typ, m.b) {
+				cancel()
+				return
+			}
+		case <-ss.frameC:
+			if b := ss.nextFrame(); b != nil && !ss.write(ctx, websocket.MessageBinary, b) {
 				cancel()
 				return
 			}
 		}
 	}
+}
+
+func (ss *session) write(ctx context.Context, typ websocket.MessageType, b []byte) bool {
+	wctx, c := context.WithTimeout(ctx, 5*time.Second)
+	defer c()
+	return ss.conn.Write(wctx, typ, b) == nil
 }
 
 func (ss *session) pinger(ctx context.Context) {

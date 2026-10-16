@@ -8,3 +8,8 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", SYMLINK+="w
 
 # Alternative ohne udev: in der Oberfläche »USB-Merkmale (VID/PID)« wählen,
 # dann findet die Bridge den Port selbst (funktioniert auch unter Windows).
+
+# Kamera (Photo Station): libgphoto2 markiert erkannte Kameras mit
+# ID_GPHOTO2=1, gibt sie aber nur dem angemeldeten Desktop-Benutzer frei
+# (uaccess). Der Dienstbenutzer hwbridge ist in plugdev und braucht diese Zeile:
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_GPHOTO2}=="1", GROUP="plugdev", MODE="0660"

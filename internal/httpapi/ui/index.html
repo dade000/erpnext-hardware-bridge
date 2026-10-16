@@ -119,6 +119,7 @@ pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-hei
         <button class="btn" id="add-printer">+ Drucker</button>
         <button class="btn" id="add-terminal">+ Zahlungsterminal</button>
         <button class="btn" id="add-rfid">+ RFID-Reader</button>
+        <button class="btn" id="add-camera">+ Kamera</button>
         <button class="btn" id="rescan">Ports neu suchen</button>
         <span class="muted small" id="ports-info"></span>
       </div>
@@ -126,7 +127,7 @@ pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-hei
 
     <section class="panel">
       <h2>HTTP-Kompat (Übergang für den Frappe-Server)</h2>
-      <p class="muted small">Liefert <code>/weight</code> im Format der bisherigen Flask-App. Alle anderen Pfade gehen an den Legacy-Upstream, z.B. die Flask-App für <code>/shot</code> und <code>/health</code>.</p>
+      <p class="muted small">Liefert <code>/weight</code> im Format der bisherigen Flask-App, mit eingerichteter Kamera auch <code>/shot</code>, <code>/health</code> und <code>/reset</code>. Alle anderen Pfade gehen an den Legacy-Upstream (die Flask-App).</p>
       <label class="check"><input type="checkbox" id="h-enabled">aktiv</label>
       <div class="grid" style="margin-top:10px">
         <label>Listen-Adresse<input id="h-listen" placeholder=":5000"></label>
@@ -191,6 +192,10 @@ function fmtLast(d) {
     const tags = l.tags || [];
     return `${tags.length ? tags.length + " Tag" + (tags.length > 1 ? "s" : "") : "kein Tag"} im Feld<div class="muted small">${tags.map((t) => esc(t.tid || t.epc)).join(", ")} · vor ${age}s</div>`;
   }
+  if (d.kind === "camera" && l.model) {
+    const s = d.stats || {};
+    return `${esc(l.model)}${l.battery ? " · Akku " + esc(l.battery) : ""}<div class="muted small">${esc(l.image_format || "")}${l.live ? ` · Live-Bild an${s.fps ? " (" + s.fps + " B/s)" : ""}` : ""}</div>`;
+  }
   if (d.kind === "terminal" && l.ts) {
     const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
     return `zuletzt verbunden vor ${age}s`;
@@ -207,6 +212,13 @@ function fmtStats(s) {
     const parts = [`${s.active} offen`, `${s.sessions} Verbindungen`];
     if (s.refused) parts.push(`${s.refused} abgelehnt`);
     if (s.failures) parts.push(`${s.failures} fehlgeschlagen${s.last_error ? " („" + esc(s.last_error) + "“)" : ""}`);
+    return `<div class="muted small">${parts.join(" · ")}</div>`;
+  }
+  if (typeof s.captures === "number") {
+    const parts = [`${s.captures} Fotos`];
+    if (s.last_capture_ms) parts.push(`zuletzt ${(s.last_capture_ms / 1000).toFixed(1)} s`);
+    if (s.reopens) parts.push(`${s.reopens}× neu verbunden`);
+    if (s.failures) parts.push(`${s.failures} Fehler${s.last_error ? " („" + esc(s.last_error) + "“)" : ""}`);
     return `<div class="muted small">${parts.join(" · ")}</div>`;
   }
   if (typeof s.jobs === "number") {
@@ -476,10 +488,15 @@ function renderDevices() {
           <pre class="small" data-out="at" style="white-space:pre-wrap;margin:4px 0"></pre></div>
         <p class="muted small" style="grid-column:1/-1">metratec DeskID UHF v2: USB-C, 115200 Baud. Wenig Sendeleistung (z.B. 2–4 dBm) hält die Reichweite kurz, damit nur das aufgelegte Paar antwortet. »Testen« liest die Tags am Reader und, wenn genau einer aufliegt, die ersten Bytes seines Nutzerspeichers samt einer dort gefundenen Adresse – so lässt sich prüfen, wo der NFC-Bereich beginnt.</p>` : d.kind === "printer" ? `${printerFields(d, i)}
         <label class="check" style="grid-column:1/-1"><input type="checkbox" data-f="default" ${d.default ? "checked" : ""}>Standarddrucker dieses Arbeitsplatzes (für den Schnelldruck im ERPNext, je Format einer)</label>
-        <p class="muted small" style="grid-column:1/-1">${printerNote(d)}</p>` : d.kind === "terminal" ? `
+        <p class="muted small" style="grid-column:1/-1">${printerNote(d)}</p>` : d.kind === "camera" ? `
+        <label>Bildqualität<input data-f="image_format" list="dc-${i}" value="${esc(d.image_format)}" placeholder="wie an der Kamera eingestellt">
+          <datalist id="dc-${i}">${(cameraChoices[d.id] || []).map((o) => `<option value="${esc(o)}">`).join("")}</datalist></label>
+        <label>Live-Bild: Bilder pro Sekunde<input data-f="live_fps" type="number" min="1" max="30" value="${d.live_fps || 15}"></label>
+        <label>Live-Bild der Kamera ohne Zuschauer noch (s)<input data-f="live_hold_s" type="number" min="0" max="600" value="${d.live_hold_s || 30}"></label>
+        <p class="muted small" style="grid-column:1/-1">${d.driver === "simulator" ? "Simulator: Testbild statt Kamera, zum Ausprobieren der Photo Station." : "Kamera per USB (libgphoto2, z.B. Canon EOS); die erste gefundene Kamera wird verwendet. Fotos landen im RAM der Kamera, nicht auf der Karte. Die Kamera darf nur ein Programm gleichzeitig benutzen: die Flask-App vorher beenden."} »Testen« zeigt Modell, Akku, die Bildqualitäten der Kamera (Auswahl im Feld oben) und ein Live-Bild. Für die Photo Station reicht eine JPEG-Stufe um 2000–3000 px (z.B. „Small Fine JPEG“), größere Fotos machen nur den Upload langsamer.</p>` : d.kind === "terminal" ? `
         <label>Terminal (IP:Port im LAN)<input data-f="address" value="${esc(d.address)}" placeholder="192.168.1.50:80"></label>
         <label>Lokaler Port<input data-f="local_port" type="number" min="1" max="65535" value="${d.local_port || ""}"></label>
-        <p class="muted small" style="grid-column:1/-1">Die Kasse verbindet sich mit <code>ws://127.0.0.1:${d.local_port || "PORT"}</code>, die Bridge reicht die Verbindung unverändert ans Terminal weiter. Im POS Profile als Terminal-IP <code>127.0.0.1</code> und als Port <code>${d.local_port || "PORT"}</code> eintragen. Angenommen werden nur Verbindungen von den erlaubten Origins; das Ziel muss im eigenen Netz liegen.</p>` : `<p class="muted small" style="grid-column:1/-1">Geräteklasse ${esc(d.kind)}: Einstellungen folgen mit dem Treiber (Kamera Phase 2, Scanner Phase 3). Bis dahin nur ID und Treiber.</p>`}
+        <p class="muted small" style="grid-column:1/-1">Die Kasse verbindet sich mit <code>ws://127.0.0.1:${d.local_port || "PORT"}</code>, die Bridge reicht die Verbindung unverändert ans Terminal weiter. Im POS Profile als Terminal-IP <code>127.0.0.1</code> und als Port <code>${d.local_port || "PORT"}</code> eintragen. Angenommen werden nur Verbindungen von den erlaubten Origins; das Ziel muss im eigenen Netz liegen.</p>` : `<p class="muted small" style="grid-column:1/-1">Geräteklasse ${esc(d.kind)}: Einstellungen folgen mit dem Treiber (Scanner Phase 3). Bis dahin nur ID und Treiber.</p>`}
       </div>
       <div class="small" data-out="test"></div>
     </div>`;
@@ -524,7 +541,8 @@ function onDeviceEdit(ev) {
       if (p) d.port = { match: { vid: p.vid, pid: p.pid, serial: p.serial || "" } };
       return;
     }
-    case "baud": case "poll_ms": case "stable_samples": case "power_dbm": d[f] = parseInt(v, 10) || 0; return;
+    case "image_format": d.image_format = v.trim(); return;
+    case "baud": case "poll_ms": case "stable_samples": case "power_dbm": case "live_fps": case "live_hold_s": d[f] = parseInt(v, 10) || 0; return;
     case "stable_tolerance_kg": d[f] = parseFloat(v) || 0; return;
   }
 }
@@ -551,7 +569,7 @@ $("c-devices").addEventListener("click", async (ev) => {
     return;
   }
   const out = card.querySelector('[data-out="test"]');
-  out.innerHTML = `<span class="muted">${d.kind === "printer" ? "Drucke…" : d.kind === "terminal" ? "Verbinde…" : d.kind === "rfid" ? "Lese…" : "Messe…"}</span>`;
+  out.innerHTML = `<span class="muted">${d.kind === "printer" ? "Drucke…" : d.kind === "terminal" ? "Verbinde…" : d.kind === "rfid" ? "Lese…" : d.kind === "camera" ? "Verbinde mit der Kamera…" : "Messe…"}</span>`;
   const r = await api("POST", `/api/devices/${encodeURIComponent(d.id)}/test`);
   if (r.data.ok) {
     const x = r.data.result;
@@ -561,12 +579,30 @@ $("c-devices").addEventListener("click", async (ev) => {
       ? `<div class="notice n-ok">Terminal ${esc(x.target)} antwortet (${x.ms} ms).</div>`
       : d.kind === "rfid"
       ? rfidTestResult(x)
+      : d.kind === "camera"
+      ? cameraTestResult(d, x)
       : `<div class="notice n-ok">Antwort: <b>${x.kg.toFixed(3)} kg</b> (roh „${esc(x.raw)}“)</div>`;
   } else {
     const e = r.data.error || {};
     out.innerHTML = `<div class="notice n-err">${esc(e.message || "Fehler")} <span class="muted">[${esc(e.code)}]</span>. Test läuft gegen die gespeicherte Konfiguration.</div>`;
   }
 });
+
+const cameraChoices = {};
+function cameraTestResult(d, x) {
+  const f = x.image_format || {};
+  if (f.choices) {
+    cameraChoices[d.id] = f.choices;
+    const dl = document.getElementById("dc-" + cfg.devices.indexOf(d));
+    if (dl) dl.innerHTML = f.choices.map((o) => `<option value="${esc(o)}">`).join("");
+  }
+  let h = `<div class="notice n-ok"><b>${esc(x.model || "Kamera")}</b>${x.port ? " an " + esc(x.port) : ""}${x.battery ? " · Akku " + esc(x.battery) : ""}${x.library ? ` <span class="muted">(${esc(x.library)})</span>` : ""}<br>
+    Bildqualität: <b>${esc(f.value || "?")}</b>${x.capture_target ? " · Ablage: " + esc(x.capture_target) : ""}</div>`;
+  if (f.choices) h += `<div class="small muted">Mögliche Bildqualitäten: ${f.choices.map(esc).join(" · ")}</div>`;
+  if (x.preview) h += `<img src="${x.preview}" alt="Live-Bild" style="max-width:100%;max-height:320px;margin-top:6px;border-radius:6px">`;
+  else if (x.preview_error) h += `<div class="notice n-err">Kein Live-Bild: ${esc(x.preview_error)}</div>`;
+  return h;
+}
 
 function rfidTestResult(x) {
   const tags = x.tags || [];
@@ -599,6 +635,13 @@ $("add-rfid").addEventListener("click", () => {
   const n = cfg.devices.filter((d) => d.kind === "rfid").length;
   cfg.devices.push({ id: n ? `rfid${n + 1}` : "rfid", kind: "rfid", driver: (drivers.rfid || ["metratec_uhf"])[0],
     port: { path: "" }, baud: 115200, poll_ms: 400, power_dbm: 3 });
+  renderDevices();
+});
+$("add-camera").addEventListener("click", () => {
+  const n = cfg.devices.filter((d) => d.kind === "camera").length;
+  const drv = drivers.camera || [];
+  cfg.devices.push({ id: n ? `kamera${n + 1}` : "kamera", kind: "camera",
+    driver: drv.includes("gphoto2") ? "gphoto2" : drv[0] || "gphoto2", port: {}, live_fps: 15, live_hold_s: 30 });
   renderDevices();
 });
 $("add-scale").addEventListener("click", () => {
@@ -647,6 +690,7 @@ $("save").addEventListener("click", async () => {
       listen: $("h-listen").value.trim(),
       basic_auth: { user: $("h-user").value.trim(), password: $("h-pass").value },
       scale_device: $("h-scale").value,
+      camera_device: (cfg.http_compat || {}).camera_device || "",
       legacy_upstream: $("h-upstream").value.trim(),
     },
   };

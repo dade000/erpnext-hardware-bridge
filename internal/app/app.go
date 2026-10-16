@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"erpnext-hardware-bridge/internal/camera"
+	"erpnext-hardware-bridge/internal/camera/simulator"
 	"erpnext-hardware-bridge/internal/config"
 	"erpnext-hardware-bridge/internal/device"
 	"erpnext-hardware-bridge/internal/httpapi"
@@ -67,7 +69,8 @@ func New(path string, cfg *config.Config, exists bool, log *slog.Logger, level *
 	a.mgr.Register(metratec.Kind, "metratec_uhf", metratec.New)
 	printer.Register(a.mgr)
 	terminal.Register(a.mgr, func() []string { return a.Config().AllowedOrigins })
-	registerOptional(a.mgr) // Kamera usw. je nach Build-Tag
+	a.mgr.Register(camera.Kind, "simulator", camera.New(simulator.Open))
+	registerOptional(a.mgr) // Kamera über libgphoto2 (nur Linux)
 	a.ws = ws.NewServer(a.Config, a.mgr, a.bus, log)
 	level.Set(logbuf.ParseLevel(cfg.LogLevel))
 	return a

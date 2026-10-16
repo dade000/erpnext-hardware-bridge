@@ -17,7 +17,7 @@ Konzept und Entscheidungen: [docs/KONZEPT.md](docs/KONZEPT.md).
 |---|---|---|
 | 0 | Dienst, Konfiguration, Oberfläche, WS-API dual-stack, Origin-/Host-/CSRF-Schutz | fertig |
 | 1 | Waage PCE-PB (Live-Gewicht, Lesen, Tara), `/weight` im Flask-Format, Browser-Client | fertig |
-| 2 | Kamera (libgphoto2, nur Linux) | offen – bis dahin reicht die Bridge `/shot` und `/health` an die Flask-App weiter |
+| 2 | Kamera (libgphoto2, nur Linux): Fotos und Live-Bild als Binärframes, `/shot`, `/health`, `/reset` im Flask-Format, Simulator mit Testbild | gebaut; libgphoto2-Anbindung gegen die echte Bibliothek ohne Kamera geprüft, Ablauf mit dem Simulator bis in die Photo Station; an keiner echten Kamera getestet |
 | 3 | Serieller Scanner | offen |
 | 3 | Zahlungsterminal: feste WebSocket-Weiterleitung `ws://127.0.0.1:<port>` → Terminal im LAN | gebaut; gegen ein nachgebautes Terminal mit der echten TIM-Bibliothek aus der Kasse getestet, an keinem echten Terminal |
 | 4 | RFID-Reader metratec DeskID UHF v2 (AT-Protokoll): Tags im Feld live, NFC-Adresse auf Dual-Frequenz-Tags (EM4425) schreiben und zurücklesen, Speicherauszug zum Einrichten | gebaut; gegen einen nachgebauten Reader getestet (Unit-Tests und PTY-Simulator), an keinem echten Reader |
@@ -126,6 +126,26 @@ http_compat:
   basic_auth: {user: …, password: …}   # leer = Reverse Proxy authentifiziert
   legacy_upstream: http://127.0.0.1:5001  # alles außer /weight, z.B. Flask für /shot
 ```
+
+## Kamera an der Photo Station (Raspberry Pi)
+
+Die Bridge spricht die Kamera selbst über libgphoto2 an (zur Laufzeit geladen,
+kein cgo; Paket `libgphoto2-6` bzw. `libgphoto2-6t64`). Die Flask-App muss
+dafür **aus** sein: eine Kamera kann nur ein Programm gleichzeitig öffnen.
+
+1. Flask stoppen und deaktivieren.
+2. Bridge installieren (`linux-arm64` für 64-Bit-Raspberry-Pi-OS, `linux-arm`
+   für 32 Bit), udev-Regel aus `deploy/udev/` übernehmen (Zeile mit
+   `ID_GPHOTO2`), damit der Dienstbenutzer die Kamera öffnen darf.
+3. In der Oberfläche „+ Kamera“ (Treiber `gphoto2`), speichern, »Testen«:
+   zeigt Modell, Akku, die Bildqualitäten der Kamera und ein Live-Bild.
+   Bildqualität auf eine JPEG-Stufe stellen (z.B. „Small Fine JPEG“).
+4. `allowed_origins` muss die ERPNext-Adresse enthalten. Chromium fragt beim
+   ersten Zugriff der Seite auf `localhost` einmal nach („Geräte im lokalen
+   Netzwerk“) – zulassen.
+5. Soll der alte Serverweg (`capture_item_photo_server`) als Ausweg bleiben:
+   `http_compat` mit `listen: ":5000"` aktivieren; die Bridge beantwortet
+   `/shot`, `/health` und `/reset` dann selbst.
 
 ## Umstieg von der Flask-App (Linux-Box)
 
