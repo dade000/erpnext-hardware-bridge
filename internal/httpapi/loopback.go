@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -60,7 +61,7 @@ func NewLoopback(rt Runtime, port int, log *slog.Logger) http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
 		_ = indexTmpl.Execute(w, map[string]string{"CSRF": csrf})
 	})
 
@@ -203,6 +204,33 @@ func NewLoopback(rt Runtime, port int, log *slog.Logger) http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
 		res, err := dev.Raw(ctx, body.Cmd)
+		if err != nil {
+			var de *device.Error
+			if !errors.As(err, &de) {
+				de = device.Errf("unexpected", err.Error())
+			}
+			writeJSON(w, 200, map[string]any{"ok": false, "error": de})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "result": res})
+	})
+
+	// Stream Deck: eine Taste aus der Vorschau auslösen, als wäre sie
+	// gedrückt worden.
+	mux.HandleFunc("POST /api/devices/{id}/press", func(w http.ResponseWriter, r *http.Request) {
+		dev := rt.Manager().Get(r.PathValue("id"))
+		if dev == nil || dev.Kind() != "streamdeck" {
+			writeJSON(w, 404, map[string]any{"ok": false, "error": device.Errf("device_missing", "Kein Stream Deck mit dieser ID (erst speichern?)")})
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<10))
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"ok": false, "error": device.Errf("bad_request", err.Error())})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		res, err := dev.Handle(ctx, "press", body)
 		if err != nil {
 			var de *device.Error
 			if !errors.As(err, &de) {

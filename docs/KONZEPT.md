@@ -1018,3 +1018,43 @@ Zuschauern, Sucher aus nach Haltezeit, Wiederverbinden), WS- und Kompat-Tests
 mit dem Simulator, Photo Station auf Dev mit Simulator und Chromium bis zum
 angelegten Unikat. Offen: echte Canon (Live-Bildrate, Fokus, Aufnahme im
 Live-Bild, Auto-Abschaltung), 32-Bit-Pi (purego Tier 2).
+
+## 24. Stream Deck (2026-10-19)
+
+Für die Photo Station. Entscheidungen (Daniel, 2026-10-19):
+Elgato Stream Deck MK.2 (15 Tasten), Linux, Belegung **fest in `bridge.yaml`**
+(nicht von der Seite gesetzt). Die Werkstatt-Station bekommt vorerst keine
+Anbindung („Photostation reicht“).
+
+* **Gerät.** Klasse `streamdeck`, Treiber `elgato` (Original V2 `0x006d`, MK.2
+  `0x0080`, MK.2 Scissor `0x00a5`) und `simulator`. Mini, XL, Original V1 und
+  Plus fehlen bewusst (andere Tastenzahl bzw. anderes Protokoll). Zugriff über
+  `/dev/hidrawN`, gefunden per sysfs (`HID_ID`, `HID_UNIQ` = Seriennummer),
+  ohne libusb/cgo; Feature-Reports per `HIDIOCSFEATURE`/`HIDIOCGFEATURE`.
+  Andere Betriebssysteme melden „nur unter Linux“. Rechte: udev-Regel
+  `SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", GROUP="plugdev"`.
+* **Belegung.** `keys: [{key, label, action, color}]`, `key` 0–14 zeilenweise
+  von links oben, `action` frei (`a-z0-9._-`), `color` `#rrggbb`. Die Bridge
+  zeichnet die Tasten selbst (Go-Bold, automatischer Umbruch und
+  Schriftgröße, Text schwarz oder weiß nach Hintergrund), JPEG 72×72, um 180°
+  gedreht. Icons gibt es nicht.
+* **Ereignis.** Ein Druck geht als `streamdeck.key` `{key, action, label, ts}`
+  an alle Verbindungen, die das Gerät abonniert haben (`streamdeck.subscribe`).
+  Tasten ohne Aktion melden nichts. Losgelassen wird nicht gemeldet.
+* **Rückmeldung am Gerät.** Ohne Abonnenten sind alle Tasten grau, damit man
+  sieht, dass ein Druck nirgends ankommt; gedrückt bekommt die Taste einen
+  hellen Rahmen. Beim Beenden der Bridge zeigt das Gerät wieder das
+  Elgato-Logo.
+* **Seite.** Die Photo Station abonniert nur, solange sie sichtbar ist, und
+  deutet `photo.shoot|save|retake|focus` (wie Leertaste/Enter/Esc/F). Andere
+  Seiten können später eigene Aktionen auswerten, die Bridge reicht nur den
+  Namen durch.
+* **Kommandos.** `streamdeck.test` (= »Testen«: Tastennummern 3 s am Gerät,
+  Modell/Seriennummer/Firmware, Tastenbilder als PNG für die Vorschau),
+  `streamdeck.press {key}` (Druck auslösen wie am Gerät; Oberfläche:
+  `POST /api/devices/{id}/press`).
+
+Geprüft: Unit-Tests mit nachgebautem MK.2 (Reports, Ereignisse, Grau/Farbe
+nach Abonnenten, Abziehen → offline, Logo beim Beenden), WS-Test mit dem
+Simulator. Offen: echtes Gerät (Bildausrichtung, Firmware-/Seriennummer-
+Offsets, Wiederverbinden nach Abziehen).

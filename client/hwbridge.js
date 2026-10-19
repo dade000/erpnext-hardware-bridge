@@ -31,6 +31,8 @@
  *   hw.on("camera.frame", (f) => …);            // {seq, blob} – Live-Bild, nur mit subscribe("camera")
  *   hw.subscribe("camera");                    // Live-Bild an (Abmeldefunktion = aus)
  *   const shot = await hw.capture();           // {blob, width, height, bytes, ms}
+ *   hw.on("streamdeck.key", (k) => …);          // {key, action, label, ts} – nur mit subscribe("streamdeck")
+ *   hw.subscribe("streamdeck");                // solange die Seite sichtbar ist; sonst sind die Tasten grau
  *
  * Bilder kommen als Binärframe (kein Base64): 4 Byte Länge des JSON-Kopfs,
  * der Kopf wie eine normale Nachricht, danach die Nutzlast. Der Client hängt

@@ -8,7 +8,7 @@ After=network.target
 [Service]
 User=hwbridge
 Group=hwbridge
-# dialout: serielle Ports; plugdev: USB-Kamera (Phase 2)
+# dialout: serielle Ports; plugdev: USB-Kamera, Stream Deck (hidraw)
 SupplementaryGroups=dialout plugdev
 ExecStart=/opt/erpnext-hardware-bridge/erpnext-hardware-bridge -config /etc/erpnext-hardware-bridge/bridge.yaml -log-file -
 Restart=always

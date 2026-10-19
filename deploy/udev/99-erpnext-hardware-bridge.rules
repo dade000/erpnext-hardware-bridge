@@ -13,3 +13,7 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="2303", SYMLINK+="w
 # ID_GPHOTO2=1, gibt sie aber nur dem angemeldeten Desktop-Benutzer frei
 # (uaccess). Der Dienstbenutzer hwbridge ist in plugdev und braucht diese Zeile:
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_GPHOTO2}=="1", GROUP="plugdev", MODE="0660"
+
+# Stream Deck (Elgato, VID 0fd9): die Bridge spricht es über /dev/hidrawN an.
+# Ohne diese Zeile gehört hidraw nur root und das Gerät meldet »keine Berechtigung«.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", GROUP="plugdev", MODE="0660"

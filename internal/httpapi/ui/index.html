@@ -60,6 +60,15 @@ button.danger { color: var(--err); }
 pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .hidden { display: none; }
 @media (max-width: 600px) { th:nth-child(4), td:nth-child(4) { display: none; } }
+.deck { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; grid-column: 1/-1; }
+.deck-key { border: 1px solid var(--line); border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+.deck-key textarea, .deck-key input { font-size: 12px; min-height: 0; }
+.deck-key textarea { height: 36px; resize: none; }
+.deck-key .deck-n { display: flex; justify-content: space-between; align-items: center; font-size: 11px; }
+.deck-key input[type=color] { width: 28px; height: 20px; padding: 0; border: 0; background: none; }
+.deck-preview { display: grid; grid-template-columns: repeat(5, 72px); gap: 6px; margin-top: 6px; }
+.deck-preview img { width: 72px; height: 72px; border-radius: 8px; cursor: pointer; display: block; }
+.deck-preview img:active { outline: 3px solid #fff; }
 </style>
 </head>
 <body>
@@ -120,6 +129,7 @@ pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-hei
         <button class="btn" id="add-terminal">+ Zahlungsterminal</button>
         <button class="btn" id="add-rfid">+ RFID-Reader</button>
         <button class="btn" id="add-camera">+ Kamera</button>
+        <button class="btn" id="add-streamdeck">+ Stream Deck</button>
         <button class="btn" id="rescan">Ports neu suchen</button>
         <span class="muted small" id="ports-info"></span>
       </div>
@@ -200,6 +210,10 @@ function fmtLast(d) {
     const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
     return `zuletzt verbunden vor ${age}s`;
   }
+  if (d.kind === "streamdeck" && l.model) {
+    const age = l.ts ? Math.round((Date.now() - Date.parse(l.ts)) / 1000) : null;
+    return `${esc(l.model)}${l.serial ? " #" + esc(l.serial) : ""}<div class="muted small">${age === null ? "noch keine Taste gedrückt" : `Taste ${l.key + 1}${l.action ? " (" + esc(l.action) + ")" : " ohne Aktion"} vor ${age}s`}</div>`;
+  }
   if (d.kind === "printer" && l.ts) {
     const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
     return `letzter Druck vor ${age}s<div class="muted small">${esc(l.title || "")} · ${esc(l.format)} · ${l.bytes} Bytes</div>`;
@@ -219,6 +233,11 @@ function fmtStats(s) {
     if (s.last_capture_ms) parts.push(`zuletzt ${(s.last_capture_ms / 1000).toFixed(1)} s`);
     if (s.reopens) parts.push(`${s.reopens}× neu verbunden`);
     if (s.failures) parts.push(`${s.failures} Fehler${s.last_error ? " („" + esc(s.last_error) + "“)" : ""}`);
+    return `<div class="muted small">${parts.join(" · ")}</div>`;
+  }
+  if (typeof s.presses === "number") {
+    const parts = [`${s.presses} Tastendrücke`];
+    if (s.reopens) parts.push(`${s.reopens}× neu verbunden`);
     return `<div class="muted small">${parts.join(" · ")}</div>`;
   }
   if (typeof s.jobs === "number") {
@@ -493,7 +512,7 @@ function renderDevices() {
           <datalist id="dc-${i}">${(cameraChoices[d.id] || []).map((o) => `<option value="${esc(o)}">`).join("")}</datalist></label>
         <label>Live-Bild: Bilder pro Sekunde<input data-f="live_fps" type="number" min="1" max="30" value="${d.live_fps || 15}"></label>
         <label>Live-Bild der Kamera ohne Zuschauer noch (s)<input data-f="live_hold_s" type="number" min="0" max="600" value="${d.live_hold_s || 30}"></label>
-        <p class="muted small" style="grid-column:1/-1">${d.driver === "simulator" ? "Simulator: Testbild statt Kamera, zum Ausprobieren der Photo Station." : "Kamera per USB (libgphoto2, z.B. Canon EOS); die erste gefundene Kamera wird verwendet. Fotos landen im RAM der Kamera, nicht auf der Karte. Die Kamera darf nur ein Programm gleichzeitig benutzen: die Flask-App vorher beenden."} »Testen« zeigt Modell, Akku, die Bildqualitäten der Kamera (Auswahl im Feld oben) und ein Live-Bild. Für die Photo Station reicht eine JPEG-Stufe um 2000–3000 px (z.B. „Small Fine JPEG“), größere Fotos machen nur den Upload langsamer.</p>` : d.kind === "terminal" ? `
+        <p class="muted small" style="grid-column:1/-1">${d.driver === "simulator" ? "Simulator: Testbild statt Kamera, zum Ausprobieren der Photo Station." : "Kamera per USB (libgphoto2, z.B. Canon EOS); die erste gefundene Kamera wird verwendet. Fotos landen im RAM der Kamera, nicht auf der Karte. Die Kamera darf nur ein Programm gleichzeitig benutzen: die Flask-App vorher beenden."} »Testen« zeigt Modell, Akku, die Bildqualitäten der Kamera (Auswahl im Feld oben) und ein Live-Bild. Für die Photo Station reicht eine JPEG-Stufe um 2000–3000 px (z.B. „Small Fine JPEG“), größere Fotos machen nur den Upload langsamer.</p>` : d.kind === "streamdeck" ? deckFields(d) : d.kind === "terminal" ? `
         <label>Terminal (IP:Port im LAN)<input data-f="address" value="${esc(d.address)}" placeholder="192.168.1.50:80"></label>
         <label>Lokaler Port<input data-f="local_port" type="number" min="1" max="65535" value="${d.local_port || ""}"></label>
         <p class="muted small" style="grid-column:1/-1">Die Kasse verbindet sich mit <code>ws://127.0.0.1:${d.local_port || "PORT"}</code>, die Bridge reicht die Verbindung unverändert ans Terminal weiter. Im POS Profile als Terminal-IP <code>127.0.0.1</code> und als Port <code>${d.local_port || "PORT"}</code> eintragen. Angenommen werden nur Verbindungen von den erlaubten Origins; das Ziel muss im eigenen Netz liegen.</p>` : `<p class="muted small" style="grid-column:1/-1">Geräteklasse ${esc(d.kind)}: Einstellungen folgen mit dem Treiber (Scanner Phase 3). Bis dahin nur ID und Treiber.</p>`}
@@ -511,6 +530,7 @@ function onDeviceEdit(ev) {
   const d = cfg.devices[+card.dataset.i];
   const f = ev.target.dataset.f;
   const v = ev.target.value;
+  if (ev.target.dataset.kf) return onDeckKeyEdit(d, ev.target);
   d.port = d.port || {};
   switch (f) {
     case "id": d.id = v.trim(); card.querySelector(".device-head b").textContent = d.id || "neues Gerät"; renderScaleSelect($("h-scale").value); return;
@@ -542,6 +562,8 @@ function onDeviceEdit(ev) {
       return;
     }
     case "image_format": d.image_format = v.trim(); return;
+    case "serial": d.serial = v.trim(); return;
+    case "brightness": d.brightness = parseInt(v, 10) || 0; return;
     case "baud": case "poll_ms": case "stable_samples": case "power_dbm": case "live_fps": case "live_hold_s": d[f] = parseInt(v, 10) || 0; return;
     case "stable_tolerance_kg": d[f] = parseFloat(v) || 0; return;
   }
@@ -563,13 +585,19 @@ $("c-devices").addEventListener("click", async (ev) => {
     pre.textContent = `→ ${cmd}\n${text}\n\n` + pre.textContent.replace(`→ ${cmd}\n…\n`, "");
     return;
   }
+  if (btn.dataset.act === "deck-preset") {
+    if ((d.keys || []).length && !confirm("Die bisherige Belegung ersetzen?")) return;
+    d.keys = DECK_PRESETS[btn.dataset.preset].map((k) => ({ ...k }));
+    renderDevices();
+    return;
+  }
   if (btn.dataset.act === "remove") {
     cfg.devices.splice(+card.dataset.i, 1);
     renderDevices(); renderScaleSelect($("h-scale").value);
     return;
   }
   const out = card.querySelector('[data-out="test"]');
-  out.innerHTML = `<span class="muted">${d.kind === "printer" ? "Drucke…" : d.kind === "terminal" ? "Verbinde…" : d.kind === "rfid" ? "Lese…" : d.kind === "camera" ? "Verbinde mit der Kamera…" : "Messe…"}</span>`;
+  out.innerHTML = `<span class="muted">${d.kind === "printer" ? "Drucke…" : d.kind === "terminal" ? "Verbinde…" : d.kind === "rfid" ? "Lese…" : d.kind === "camera" ? "Verbinde mit der Kamera…" : d.kind === "streamdeck" ? "Zeige die Tastennummern am Gerät…" : "Messe…"}</span>`;
   const r = await api("POST", `/api/devices/${encodeURIComponent(d.id)}/test`);
   if (r.data.ok) {
     const x = r.data.result;
@@ -581,11 +609,82 @@ $("c-devices").addEventListener("click", async (ev) => {
       ? rfidTestResult(x)
       : d.kind === "camera"
       ? cameraTestResult(d, x)
+      : d.kind === "streamdeck"
+      ? deckTestResult(x)
       : `<div class="notice n-ok">Antwort: <b>${x.kg.toFixed(3)} kg</b> (roh „${esc(x.raw)}“)</div>`;
   } else {
     const e = r.data.error || {};
     out.innerHTML = `<div class="notice n-err">${esc(e.message || "Fehler")} <span class="muted">[${esc(e.code)}]</span>. Test läuft gegen die gespeicherte Konfiguration.</div>`;
   }
+});
+
+// ---------- Stream Deck ----------
+// Aktionen, die die Seiten kennen. Was eine Aktion bewirkt, entscheidet die
+// Seite; die Bridge reicht nur den Namen weiter.
+const DECK_ACTIONS = {
+  "photo.shoot": "Photo Station: Auslösen",
+  "photo.save": "Photo Station: Speichern",
+  "photo.retake": "Photo Station: Nochmal",
+  "photo.focus": "Photo Station: Fokus",
+};
+const DECK_PRESETS = {
+  photo: [
+    { key: 0, label: "Auslösen", action: "photo.shoot", color: "#2e7d32" },
+    { key: 1, label: "Speichern", action: "photo.save", color: "#1565c0" },
+    { key: 2, label: "Nochmal", action: "photo.retake", color: "#c62828" },
+    { key: 3, label: "Fokus", action: "photo.focus", color: "#555555" },
+  ],
+};
+function deckFields(d) {
+  const keys = {};
+  for (const k of d.keys || []) keys[k.key] = k;
+  const cells = [];
+  for (let n = 0; n < 15; n++) {
+    const k = keys[n] || {};
+    cells.push(`<div class="deck-key" data-key="${n}">
+      <div class="deck-n"><span class="muted">Taste ${n + 1}</span><input type="color" data-kf="color" value="${esc(k.color || "#333333")}" title="Hintergrundfarbe"></div>
+      <textarea data-kf="label" placeholder="Beschriftung" maxlength="40">${esc(k.label)}</textarea>
+      <input data-kf="action" list="deck-actions" value="${esc(k.action)}" placeholder="Aktion" spellcheck="false" title="${esc(DECK_ACTIONS[k.action] || "")}">
+    </div>`);
+  }
+  return `
+    <label>Helligkeit (%)<input data-f="brightness" type="number" min="1" max="100" value="${d.brightness || 70}"></label>
+    <label>Seriennummer (nur bei mehreren Geräten)<input data-f="serial" value="${esc(d.serial)}" placeholder="leer = erstes gefundenes"></label>
+    <div style="grid-column:1/-1" class="row"><span class="muted small">Vorlage:</span>
+      <button class="btn" data-act="deck-preset" data-preset="photo">Photo Station</button></div>
+    <div class="deck">${cells.join("")}</div>
+    <datalist id="deck-actions">${Object.entries(DECK_ACTIONS).map(([a, t]) => `<option value="${esc(a)}">${esc(t)}</option>`).join("")}</datalist>
+    <p class="muted small" style="grid-column:1/-1">${d.driver === "simulator" ? "Simulator: kein Gerät nötig, Tasten in der Vorschau unter »Testen« anklicken." : "Elgato Stream Deck MK.2 oder Original V2 (15 Tasten) per USB, unter Linux über hidraw (udev-Regel aus deploy/udev)."}
+      Ein Tastendruck geht mit seiner Aktion an die offene Seite, die das Stream Deck abonniert hat; Tasten ohne Aktion sind nur Schilder. Ist keine solche Seite offen, sind die Tasten grau. Zeilenumbruch in der Beschriftung mit Enter; Sonderzeichen wie ✔ oder Emoji kennt die Schrift nicht, sie werden weggelassen. »Testen« zeigt kurz die Tastennummern am Gerät.</p>`;
+}
+function onDeckKeyEdit(d, el) {
+  const n = +el.closest(".deck-key").dataset.key;
+  d.keys = d.keys || [];
+  let k = d.keys.find((x) => x.key === n);
+  if (!k) { k = { key: n }; d.keys.push(k); }
+  k[el.dataset.kf] = el.dataset.kf === "label" ? el.value : el.value.trim();
+  if (el.dataset.kf === "action") el.title = DECK_ACTIONS[k.action] || "";
+  for (const f of ["label", "action", "color"]) if (!k[f]) delete k[f];
+  d.keys = d.keys.filter((x) => x.label || x.action || x.color).sort((a, b) => a.key - b.key);
+}
+function deckTestResult(x) {
+  const keys = x.keys || [];
+  return `<div class="notice n-ok"><b>${esc(x.model || "Stream Deck")}</b>${x.serial ? " #" + esc(x.serial) : ""}${x.port ? " an " + esc(x.port) : ""}${x.firmware ? ` <span class="muted">(Firmware ${esc(x.firmware)})</span>` : ""}<br>
+    ${x.listeners ? `${x.listeners} Seite${x.listeners > 1 ? "n hören" : " hört"} gerade zu.` : "Gerade hört keine Seite zu (Tasten grau)."} Klick auf eine Taste löst sie aus.</div>
+    <div class="deck-preview" data-deck-preview>${keys.map((k) => `<img src="${k.image}" data-press="${k.key}" title="Taste ${k.key + 1}${k.action ? ": " + esc(k.action) : ""}" alt="">`).join("")}</div>
+    <div class="small muted" data-deck-pressed></div>`;
+}
+$("c-devices").addEventListener("click", async (ev) => {
+  const img = ev.target.closest("[data-press]");
+  if (!img) return;
+  const d = cfg.devices[+img.closest(".device").dataset.i];
+  const out = img.closest(".device").querySelector("[data-deck-pressed]");
+  const r = await api("POST", `/api/devices/${encodeURIComponent(d.id)}/press`, { key: +img.dataset.press });
+  if (!out) return;
+  const x = r.data.result || {};
+  out.textContent = r.data.ok
+    ? `Taste ${x.key + 1}: ${x.action ? `»${x.action}« an ${x.listeners || 0} Seite(n) gemeldet` : "ohne Aktion"}`
+    : (r.data.error || {}).message || "Fehler";
 });
 
 const cameraChoices = {};
@@ -642,6 +741,13 @@ $("add-camera").addEventListener("click", () => {
   const drv = drivers.camera || [];
   cfg.devices.push({ id: n ? `kamera${n + 1}` : "kamera", kind: "camera",
     driver: drv.includes("gphoto2") ? "gphoto2" : drv[0] || "gphoto2", port: {}, live_fps: 15, live_hold_s: 30 });
+  renderDevices();
+});
+$("add-streamdeck").addEventListener("click", () => {
+  const n = cfg.devices.filter((d) => d.kind === "streamdeck").length;
+  const drv = drivers.streamdeck || [];
+  cfg.devices.push({ id: n ? `streamdeck${n + 1}` : "streamdeck", kind: "streamdeck",
+    driver: drv.includes("elgato") ? "elgato" : drv[0] || "elgato", port: {}, brightness: 70, keys: [] });
   renderDevices();
 });
 $("add-scale").addEventListener("click", () => {

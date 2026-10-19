@@ -93,7 +93,30 @@ type DeviceConfig struct {
 	ImageFormat string `yaml:"image_format,omitempty" json:"image_format,omitempty"`
 	LiveFPS     int    `yaml:"live_fps,omitempty" json:"live_fps,omitempty"`
 	LiveHoldS   int    `yaml:"live_hold_s,omitempty" json:"live_hold_s,omitempty"`
+
+	// Stream Deck: Seriennummer, wenn mehrere angeschlossen sind (leer =
+	// das erste gefundene), Helligkeit in Prozent (0 = Vorgabe 70) und die
+	// feste Tastenbelegung. Ein Tastendruck geht als streamdeck.key mit der
+	// Aktion an die Seiten, die das Gerät abonniert haben.
+	Serial     string    `yaml:"serial,omitempty" json:"serial,omitempty"`
+	Brightness int       `yaml:"brightness,omitempty" json:"brightness,omitempty"`
+	Keys       []DeckKey `yaml:"keys,omitempty" json:"keys,omitempty"`
 }
+
+// DeckKey belegt eine Taste des Stream Decks. Key zählt von links oben
+// zeilenweise ab 0. Action ist der Name, den die Seite auswertet (z.B.
+// photo.shoot); ohne Action ist die Taste nur ein Schild.
+type DeckKey struct {
+	Key    int    `yaml:"key" json:"key"`
+	Label  string `yaml:"label,omitempty" json:"label,omitempty"`
+	Action string `yaml:"action,omitempty" json:"action,omitempty"`
+	// Color ist die Hintergrundfarbe als #rrggbb; leer = dunkelgrau.
+	Color string `yaml:"color,omitempty" json:"color,omitempty"`
+}
+
+// DeckKeys ist die Tastenzahl der unterstützten Stream Decks (Original V2,
+// MK.2: 5 × 3).
+const DeckKeys = 15
 
 // PortSpec wählt einen seriellen Port entweder über den Pfad oder über
 // USB-Merkmale. In YAML darf er auch als einfacher String stehen.
@@ -159,7 +182,7 @@ type BasicAuth struct {
 // Bekannte Treiber je Geräteklasse. Nicht enthaltene Treiber werden trotzdem
 // akzeptiert, damit eine Config aus einem neueren Build nicht beim Laden
 // scheitert; das Gerät meldet dann »Treiber nicht enthalten«.
-var knownKinds = map[string]bool{"scale": true, "camera": true, "scanner": true, "printer": true, "terminal": true, "rfid": true}
+var knownKinds = map[string]bool{"scale": true, "camera": true, "scanner": true, "printer": true, "terminal": true, "rfid": true, "streamdeck": true}
 
 // Default liefert eine lauffähige Startkonfiguration ohne Geräte.
 func Default() *Config {
@@ -250,7 +273,7 @@ func (c *Config) Validate() error {
 		}
 		seen[d.ID] = true
 		if !knownKinds[d.Kind] {
-			errs = append(errs, fmt.Errorf("%s: kind %q unbekannt (scale, camera, scanner, printer, terminal, rfid)", where, d.Kind))
+			errs = append(errs, fmt.Errorf("%s: kind %q unbekannt (scale, camera, scanner, printer, terminal, rfid, streamdeck)", where, d.Kind))
 		}
 		if d.Driver == "" {
 			errs = append(errs, fmt.Errorf("%s: driver fehlt", where))
@@ -342,6 +365,9 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Errorf("%s: live_hold_s muss zwischen 0 und 600 liegen", where))
 			}
 		}
+		if d.Kind == "streamdeck" {
+			errs = append(errs, checkDeck(where, d)...)
+		}
 		if d.Kind == "scale" {
 			if d.PollMS < 50 || d.PollMS > 10_000 {
 				errs = append(errs, fmt.Errorf("%s: poll_ms muss zwischen 50 und 10000 liegen", where))
@@ -382,6 +408,56 @@ func (c *Config) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func checkDeck(where string, d DeviceConfig) []error {
+	var errs []error
+	if d.Brightness < 0 || d.Brightness > 100 {
+		errs = append(errs, fmt.Errorf("%s: brightness %d ungültig (1–100, 0 = Vorgabe 70)", where, d.Brightness))
+	}
+	used := map[int]bool{}
+	for _, k := range d.Keys {
+		name := fmt.Sprintf("%s: Taste %d", where, k.Key+1)
+		switch {
+		case k.Key < 0 || k.Key >= DeckKeys:
+			errs = append(errs, fmt.Errorf("%s: Taste %d gibt es nicht (1–%d)", where, k.Key+1, DeckKeys))
+			continue
+		case used[k.Key]:
+			errs = append(errs, fmt.Errorf("%s doppelt belegt", name))
+		}
+		used[k.Key] = true
+		if k.Action != "" && !validAction(k.Action) {
+			errs = append(errs, fmt.Errorf("%s: Aktion %q darf nur a-z, 0-9, Punkt, - und _ enthalten", name, k.Action))
+		}
+		if k.Color != "" && !validColor(k.Color) {
+			errs = append(errs, fmt.Errorf("%s: Farbe %q ist nicht #rrggbb", name, k.Color))
+		}
+		if len([]rune(k.Label)) > 40 {
+			errs = append(errs, fmt.Errorf("%s: Beschriftung zu lang (höchstens 40 Zeichen)", name))
+		}
+	}
+	return errs
+}
+
+func validAction(s string) bool {
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return s != "" && len(s) <= 64
+}
+
+func validColor(s string) bool {
+	if len(s) != 7 || s[0] != '#' {
+		return false
+	}
+	for _, r := range strings.ToLower(s[1:]) {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validID(s string) bool {

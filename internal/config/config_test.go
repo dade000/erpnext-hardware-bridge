@@ -215,3 +215,37 @@ func TestRFIDDefaultsAndValidation(t *testing.T) {
 		t.Errorf("rfid ist gültig: %v", err)
 	}
 }
+
+func TestValidateStreamDeck(t *testing.T) {
+	const y = `
+devices:
+  - id: deck
+    kind: streamdeck
+    driver: elgato
+    keys:
+      - {key: 0, label: "Foto", action: photo.shoot, color: "#2E7D32"}
+      - {key: 14, label: "Zurück"}
+`
+	p := filepath.Join(t.TempDir(), "bridge.yaml")
+	os.WriteFile(p, []byte(y), 0o600)
+	c, _, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k := c.Devices[0].Keys; len(k) != 2 || k[0].Action != "photo.shoot" || k[1].Key != 14 {
+		t.Fatalf("Tasten = %+v", k)
+	}
+	c.Devices[0].Brightness = 120
+	c.Devices[0].Keys = []DeckKey{
+		{Key: 15}, {Key: 3, Action: "Foto machen"}, {Key: 2, Color: "grün"}, {Key: 2},
+	}
+	err = c.Validate()
+	if err == nil {
+		t.Fatal("ungültige Belegung angenommen")
+	}
+	for _, want := range []string{"brightness 120", "Taste 16 gibt es nicht", "Aktion \"Foto machen\"", "Farbe \"grün\"", "Taste 3 doppelt"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Fehler %q fehlt in:\n%v", want, err)
+		}
+	}
+}

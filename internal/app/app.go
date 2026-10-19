@@ -23,6 +23,7 @@ import (
 	"erpnext-hardware-bridge/internal/printer"
 	"erpnext-hardware-bridge/internal/rfid/metratec"
 	"erpnext-hardware-bridge/internal/scale/pce"
+	"erpnext-hardware-bridge/internal/streamdeck"
 	"erpnext-hardware-bridge/internal/terminal"
 	"erpnext-hardware-bridge/internal/update"
 	"erpnext-hardware-bridge/internal/version"
@@ -70,6 +71,8 @@ func New(path string, cfg *config.Config, exists bool, log *slog.Logger, level *
 	printer.Register(a.mgr)
 	terminal.Register(a.mgr, func() []string { return a.Config().AllowedOrigins })
 	a.mgr.Register(camera.Kind, "simulator", camera.New(simulator.Open))
+	a.mgr.Register(streamdeck.Kind, "elgato", streamdeck.New)
+	a.mgr.Register(streamdeck.Kind, "simulator", streamdeck.NewSimulator)
 	registerOptional(a.mgr) // Kamera über libgphoto2 (nur Linux)
 	a.ws = ws.NewServer(a.Config, a.mgr, a.bus, log)
 	level.Set(logbuf.ParseLevel(cfg.LogLevel))

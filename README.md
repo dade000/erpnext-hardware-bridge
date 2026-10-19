@@ -147,6 +147,34 @@ dafür **aus** sein: eine Kamera kann nur ein Programm gleichzeitig öffnen.
    `http_compat` mit `listen: ":5000"` aktivieren; die Bridge beantwortet
    `/shot`, `/health` und `/reset` dann selbst.
 
+## Stream Deck (Photo Station)
+
+Elgato Stream Deck MK.2 oder Original V2 (15 Tasten), bisher nur unter Linux
+(hidraw, ohne libusb/cgo). Die Belegung steht fest in `bridge.yaml`; die
+Bridge zeichnet die Tasten (Farbe + Beschriftung) und meldet jeden Druck als
+`streamdeck.key` mit der Aktion an die Seiten, die `streamdeck` abonniert
+haben. Hört keine Seite zu, sind die Tasten grau.
+
+1. udev-Regel aus `deploy/udev/` übernehmen (Zeile mit `0fd9`), Stream Deck
+   neu einstecken.
+2. In der Oberfläche „+ Stream Deck“, Vorlage „Photo Station“ wählen oder
+   Tasten selbst belegen, speichern.
+3. »Testen« zeigt am Gerät kurz die Tastennummern und in der Oberfläche eine
+   Vorschau; ein Klick auf eine Taste der Vorschau löst sie aus.
+
+```yaml
+- id: streamdeck
+  kind: streamdeck
+  driver: elgato          # oder simulator (ohne Gerät, Tasten nur in der Vorschau)
+  brightness: 70
+  keys:
+    - {key: 0, label: "Auslösen", action: photo.shoot, color: "#2e7d32"}
+    - {key: 1, label: "Speichern", action: photo.save, color: "#1565c0"}
+```
+
+Aktionen, die die Photo Station kennt: `photo.shoot`, `photo.save`,
+`photo.retake`, `photo.focus` (wie Leertaste, Enter, Esc, F).
+
 ## Umstieg von der Flask-App (Linux-Box)
 
 1. In `app.py` die letzte Zeile auf `app.run(host="127.0.0.1", port=5001)`
@@ -178,12 +206,13 @@ an den Parcel-Station-PC hängen und dort die Bridge installieren.
 Methoden: `hello`, `devices.list`, `bridge.info`, `scale.subscribe`,
 `scale.unsubscribe`, `scale.read`, `scale.tare`, `printer.print`,
 `printer.test`, `rfid.subscribe`, `rfid.unsubscribe`, `rfid.inventory`,
-`rfid.read`, `rfid.read_tid`, `rfid.write_uri`. Fehlercodes: `device_missing`, `scale_offline`, `timeout`,
+`rfid.read`, `rfid.read_tid`, `rfid.write_uri`, `streamdeck.subscribe`,
+`streamdeck.unsubscribe`, `streamdeck.press` (Event `streamdeck.key`). Fehlercodes: `device_missing`, `scale_offline`, `timeout`,
 `bad_response`, `busy`, `unauthorized`, `protocol_mismatch`,
 `unknown_method`, `unsupported_format`, `print_failed`, `too_large`,
 `bad_request`, `unexpected`, `rfid_offline`, `no_tag`, `multiple_tags`,
 `no_tid`, `tag_changed`, `write_failed`, `read_failed`, `verify_failed`,
-`reader_error`, `wrong_reader`.
+`reader_error`, `wrong_reader`, `streamdeck_offline`.
 
 ### RFID
 
