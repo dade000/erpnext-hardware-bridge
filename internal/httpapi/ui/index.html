@@ -708,7 +708,7 @@ function liftFields(d) {
 function liftTestResult(x) {
   const i = x.info || {}, s = x.status || {};
   const where = !s.host_menu ? "Lift ist nicht im Host-Menü – Fahrbefehle gehen erst dort." : s.busy || !s.in_position ? "Lift fährt gerade." : s.tray ? `Träger ${s.tray} steht in der Bedienöffnung.` : "Kein Träger in der Bedienöffnung.";
-  return `<div class="notice ${s.host_menu ? "n-ok" : "n-warn"}">${esc(i.type || "Lift")}${i.trays ? ", " + i.trays + " Träger" : ""}${i.width_mm ? `, ${i.width_mm}×${i.depth_mm} mm` : ""}${i.version ? ", Host-Schnittstelle " + esc(i.version) : ""}. ${esc(where)}${s.opening_msg || s.machine_msg ? ` Meldung: ${s.opening_msg || ""} ${s.machine_msg || ""}` : ""}</div>`;
+  return `<div class="notice ${s.host_menu ? "n-ok" : "n-warn"}">${esc(i.type || "Lift")}${i.trays ? ", " + i.trays + " Träger" : ""}${i.width_mm ? `, ${i.width_mm}×${i.depth_mm} mm` : ""}${i.version ? ", Host-Schnittstelle " + esc(i.version) : ""}. ${esc(where)}${s.opening_msg || s.machine_msg ? ` Meldung: ${s.opening_msg || ""} ${s.machine_msg || ""}` : ""}</div>${x.raw ? `<details class="small"><summary>Rohwerte der Steuerung</summary><pre>${esc(Object.entries(x.raw).sort().map(([k, v]) => k + " = " + v).join("\n"))}</pre></details>` : ""}`;
 }
 function deckTestResult(x) {
   const keys = x.keys || [];

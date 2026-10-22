@@ -108,7 +108,10 @@ type Lift struct {
 
 	cli    atomic.Pointer[Client]
 	demand atomic.Int32
-	kick   chan struct{}
+	// unreachable: zuletzt nicht erreichbar (für »erreichbar/nicht mehr
+	// erreichbar« genau einmal im Log statt bei jedem Versuch).
+	unreachable atomic.Bool
+	kick        chan struct{}
 
 	mu    sync.Mutex
 	last  Last
@@ -241,8 +244,7 @@ func (l *Lift) Run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			l.st.Set(device.StateOffline, "Lift nicht erreichbar: "+err.Error())
-			l.log.Debug("Lift nicht erreichbar", "err", err)
+			l.offline(err)
 			select {
 			case <-ctx.Done():
 				return
@@ -291,7 +293,9 @@ func (l *Lift) connect(ctx context.Context, cli *Client) error {
 	l.mu.Lock()
 	l.last.Info = info
 	l.mu.Unlock()
-	l.log.Info("Lift verbunden", "type", info.Type, "trays", info.Trays, "version", info.Version)
+	l.unreachable.Store(false)
+	l.log.Info("Lift verbunden", "address", l.st.Get().Port, "host_id", l.hi, "type", info.Type,
+		"trays", info.Trays, "openings", info.Openings, "version", info.Version)
 	return nil
 }
 
@@ -302,7 +306,7 @@ func (l *Lift) watch(ctx context.Context, cli *Client) {
 			if ctx.Err() != nil {
 				return
 			}
-			l.st.Set(device.StateOffline, "Lift nicht erreichbar: "+err.Error())
+			l.offline(err)
 			return
 		}
 		wait := pollIdle
@@ -318,10 +322,19 @@ func (l *Lift) watch(ctx context.Context, cli *Client) {
 	}
 }
 
+func (l *Lift) offline(err error) {
+	l.st.Set(device.StateOffline, "Lift nicht erreichbar: "+err.Error())
+	if !l.unreachable.Swap(true) {
+		l.log.Warn("Lift nicht erreichbar", "address", l.st.Get().Port, "err", err)
+	} else {
+		l.log.Debug("Lift weiter nicht erreichbar", "err", err)
+	}
+}
+
 // refresh liest den Stand der Bedienöffnung, setzt den Gerätezustand und
 // meldet Änderungen als lift.status.
 func (l *Lift) refresh(ctx context.Context, cli *Client) (DoorStatus, error) {
-	ds, err := l.doorStatus(ctx, cli)
+	ds, _, err := l.doorStatus(ctx, cli)
 	if err != nil {
 		return ds, err
 	}
@@ -334,14 +347,47 @@ func (l *Lift) refresh(ctx context.Context, cli *Client) (DoorStatus, error) {
 		l.st.Set(device.StateOnline, "")
 	}
 	l.mu.Lock()
-	changed := l.last.Status == nil || !l.last.Status.same(ds)
+	prev := l.last.Status
+	changed := prev == nil || !prev.same(ds)
 	l.last.Status = &ds
 	target := l.last.Target
 	l.mu.Unlock()
+	l.logChange(prev, ds, target)
 	if changed {
 		l.bus.Publish(device.Event{Name: "lift.status", Device: l.cfg.ID, Data: statusEvent{ds, target}})
 	}
 	return ds, nil
+}
+
+// logChange schreibt auf, was für die Fehlersuche zählt: Host-Menü und
+// Meldungen am Lift immer, jede Änderung der Öffnung während einer Fahrt.
+func (l *Lift) logChange(prev *DoorStatus, ds DoorStatus, target int) {
+	if prev == nil {
+		l.log.Info("Stand der Bedienöffnung", statusArgs(ds)...)
+		return
+	}
+	if prev.HostMenu != ds.HostMenu {
+		if ds.HostMenu {
+			l.log.Info("Lift wieder im Host-Menü")
+		} else {
+			l.log.Warn("Lift nicht mehr im Host-Menü – Fahrbefehle gehen erst wieder dort")
+		}
+	}
+	if prev.OpeningMsg != ds.OpeningMsg || prev.MachineMsg != ds.MachineMsg {
+		if ds.OpeningMsg != 0 || ds.MachineMsg != 0 {
+			l.log.Warn("Meldung am Lift", "opening_msg", ds.OpeningMsg, "machine_msg", ds.MachineMsg)
+		} else {
+			l.log.Info("Meldung am Lift erledigt")
+		}
+	}
+	if target != 0 && !prev.same(ds) {
+		l.log.Info("Bedienöffnung während der Fahrt", append([]any{"target", target}, statusArgs(ds)...)...)
+	}
+}
+
+func statusArgs(ds DoorStatus) []any {
+	return []any{"tray", ds.Tray, "in_position", ds.InPosition, "busy", ds.Busy, "opening_busy", ds.OpeningBusy,
+		"host_menu", ds.HostMenu, "automatic", ds.Automatic, "opening_msg", ds.OpeningMsg, "machine_msg", ds.MachineMsg}
 }
 
 type statusEvent struct {
@@ -360,7 +406,7 @@ func msgText(ds DoorStatus) string {
 	return strings.Join(p, ", ")
 }
 
-func (l *Lift) doorStatus(ctx context.Context, cli *Client) (DoorStatus, error) {
+func (l *Lift) doorStatus(ctx context.Context, cli *Client) (DoorStatus, Values, error) {
 	in := []Val{valid(tagHI, l.hi), unset(tagLevelLower), unset(tagLevelUpper)}
 	out := []Tag{tagMachineBusy, tagCurTray, tagPosFlag, tagOpeningMsg, tagMachineMsg, tagActiveHI, tagOpeningBusy, tagAutomaticMode}
 	v, err := cli.Exec(ctx, cmdGetDoorStatus, in, out)
@@ -368,10 +414,10 @@ func (l *Lift) doorStatus(ctx context.Context, cli *Client) (DoorStatus, error) 
 	var se *StatusError
 	if errors.As(err, &se) && se.Status == retNotHostMenu {
 		ds.HostMenu = false
-		return ds, nil
+		return ds, v, nil
 	}
 	if err != nil {
-		return ds, err
+		return ds, v, err
 	}
 	busy, _ := v.Get(tagMachineBusy)
 	ob, _ := v.Get(tagOpeningBusy)
@@ -386,7 +432,24 @@ func (l *Lift) doorStatus(ctx context.Context, cli *Client) (DoorStatus, error) 
 	ds.InPosition = pos == 1
 	ds.Automatic = auto == 1
 	ds.OpeningMsg, ds.MachineMsg = int(om), int(mm)
-	return ds, nil
+	return ds, v, nil
+}
+
+// rawValues zeigt die Rohwerte der Steuerung (mit Gültigkeitsbit), für
+// »Testen« bei der Inbetriebnahme.
+func rawValues(v Values) map[string]string {
+	names := map[Tag]string{tagMachineBusy: "MachineBusy DBW114", tagCurTray: "CurShelfBase DBD116", tagPosFlag: "ShelfBasePosFlag DBW120",
+		tagOpeningMsg: "OpeningMsg DBD102", tagMachineMsg: "MachineMsg DBD106", tagActiveHI: "ActiveHI DBW618",
+		tagOpeningBusy: "OpeningBusy DBW620", tagAutomaticMode: "AutomaticMode DBW634", tagRET: "RET DBD4", tagCMD: "CMD DBW2"}
+	out := map[string]string{}
+	for t, x := range v {
+		n := names[t]
+		if n == "" {
+			n = t.Name()
+		}
+		out[n] = fmt.Sprintf("0x%x", x)
+	}
+	return out
 }
 
 func isStatus(err error) bool {
@@ -424,14 +487,18 @@ func (l *Lift) Handle(ctx context.Context, cmd string, raw json.RawMessage) (any
 		}
 		return l.fetch(ctx, cli, p)
 	case "status", "read":
-		ds, err := l.refresh(ctx, cli)
+		if _, err := l.refresh(ctx, cli); err != nil {
+			return nil, l.fail(err)
+		}
+		// Noch einmal direkt, um die Rohwerte mitzugeben.
+		ds, raw, err := l.doorStatus(ctx, cli)
 		if err != nil {
 			return nil, l.fail(err)
 		}
 		l.mu.Lock()
 		info := l.last.Info
 		l.mu.Unlock()
-		return map[string]any{"info": info, "status": ds}, nil
+		return map[string]any{"info": info, "status": ds, "raw": rawValues(raw)}, nil
 	case "confirm", "cancel":
 		c := uint16(cmdConfirm)
 		if cmd == "cancel" {
@@ -473,6 +540,7 @@ func (l *Lift) fetch(ctx context.Context, cli *Client, p fetchParams) (any, erro
 	trays := l.last.Trays
 	l.mu.Unlock()
 	if p.Tray < 1 || (trays > 0 && p.Tray > trays) {
+		l.log.Warn("Anforderung abgelehnt: Träger ungültig", "tray", p.Tray, "trays", trays)
 		if trays > 0 {
 			return nil, device.Errf("bad_request", fmt.Sprintf("Träger %d gibt es nicht (1–%d)", p.Tray, trays))
 		}
@@ -539,12 +607,20 @@ func (l *Lift) drive(ctx context.Context, cli *Client, p fetchParams) error {
 		valid(tagTrayLower, uint32(p.Tray)),
 		unset(tagLevelLower), unset(tagTrayUpper), unset(tagLevelUpper), unset(tagTrayLift), unset(tagLevelLift),
 	}
-	for {
+	for n := 0; ; n++ {
 		_, err := cli.Exec(ctx, cmdDriveTray, in, nil)
 		var se *StatusError
 		retry := errors.Is(err, ErrBusy) || errors.As(err, &se) && (se.Status == 25 || se.Status == retHostBusy)
 		if !retry {
+			if err == nil {
+				l.log.Info("DriveTray angenommen", "tray", p.Tray, "host_id", l.hi, "light_from", p.LightFrom, "light_to", p.LightTo, "retries", n)
+			} else {
+				l.log.Warn("DriveTray abgelehnt", "tray", p.Tray, "host_id", l.hi, "err", err)
+			}
 			return err
+		}
+		if n == 0 {
+			l.log.Info("Lift noch beschäftigt, DriveTray wird wiederholt", "tray", p.Tray, "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -610,7 +686,17 @@ func (l *Lift) done(me *run, started time.Time, err error) {
 		l.stats.LastError = err.Error()
 	}
 	l.mu.Unlock()
+	if err != nil && superseded {
+		l.log.Info("Anforderung abgelöst", "tray", me.tray)
+	}
 	if err != nil && !superseded {
+		args := []any{"tray", me.tray, "err", err, "ms", time.Since(started).Milliseconds()}
+		l.mu.Lock()
+		if st := l.last.Status; st != nil {
+			args = append(args, statusArgs(*st)...)
+		}
+		l.mu.Unlock()
+		l.log.Warn("Träger nicht angekommen", args...)
 		l.bus.Publish(device.Event{Name: "lift.failed", Device: l.cfg.ID, Data: map[string]any{"tray": me.tray, "error": l.fail(err).Error(), "ts": time.Now()}})
 	}
 }

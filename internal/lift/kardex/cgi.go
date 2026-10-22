@@ -147,7 +147,7 @@ type StatusError struct {
 }
 
 func (e *StatusError) Error() string {
-	return fmt.Sprintf("Kommando 0x%04x: %s (0x%04x)", e.Cmd, StatusText(e.Cmd, e.Status), e.Status)
+	return fmt.Sprintf("Kommando 0x%04x: %s (Code %d / 0x%04x)", e.Cmd, StatusText(e.Cmd, e.Status), e.Status, e.Status)
 }
 
 // StatusText übersetzt einen Rückgabewert.
@@ -285,6 +285,8 @@ func (c *Client) read(ctx context.Context, tags []Tag) (Values, error) {
 	c.mu.Lock()
 	list, ok := c.lists[key]
 	c.mu.Unlock()
+	var lastBody string
+	var lastMissing int
 	for attempt := 0; attempt < 2; attempt++ {
 		if !ok {
 			c.mu.Lock()
@@ -314,13 +316,14 @@ func (c *Client) read(ctx context.Context, tags []Tag) (Values, error) {
 		if missing == 0 {
 			return vals, nil
 		}
+		lastBody, lastMissing = body, missing
 		// Liste unbekannt (Steuerung neu gestartet): neu bestellen.
 		c.mu.Lock()
 		delete(c.lists, key)
 		c.mu.Unlock()
 		ok = false
 	}
-	return nil, errors.New("ReadFile: Steuerung liefert die bestellten Werte nicht")
+	return nil, fmt.Errorf("ReadFile: Steuerung liefert %d von %d bestellten Werten nicht, Antwort %q", lastMissing, len(tags), short(lastBody))
 }
 
 func parseList(body string, tags []Tag) (Values, int) {
@@ -373,7 +376,7 @@ func (c *Client) Exec(ctx context.Context, cmd uint16, in []Val, out []Tag) (Val
 	}
 	ret := vals[tagRET]
 	if hi := uint16(ret >> 16); hi != cmd {
-		return nil, fmt.Errorf("Rückgabe gehört zu Kommando 0x%04x statt 0x%04x", hi, cmd)
+		return nil, fmt.Errorf("Rückgabe 0x%08x gehört zu Kommando 0x%04x statt 0x%04x (anderer Host an der Steuerung?)", ret, hi, cmd)
 	}
 	if st := uint16(ret); st != 0 {
 		return vals, &StatusError{Cmd: cmd, Status: st}

@@ -170,8 +170,16 @@ und der Lift im Host-Menü. Die Steuerung verträgt nur einen Host gleichzeitig.
   drive_timeout_s: 120
 ```
 
-In der Oberfläche zeigt »Testen« Maschinentyp, Trägerzahl und den Träger in
-der Öffnung; „Träger holen“ fährt einen Träger zum Ausprobieren an.
+In der Oberfläche zeigt »Testen« Maschinentyp, Trägerzahl, den Träger in
+der Öffnung und unter „Rohwerte der Steuerung“ die gelesenen Werte; „Träger
+holen“ fährt einen Träger zum Ausprobieren an.
+
+Logs (Tab „Log“ bzw. `bridge.log` neben der Konfiguration): Auf Stufe `info`
+stehen Verbinden/Abbrechen, jede Anforderung, Annahme oder Ablehnung von
+DriveTray mit Code, jede Änderung der Öffnung während der Fahrt, Ankunft mit
+Dauer, Fehlschläge mit dem letzten Stand, Host-Menü und Meldungen am Lift.
+Für die Inbetriebnahme `log_level: debug`: dann steht zusätzlich jede
+CGI-Anfrage samt Antwort der Steuerung im Log.
 
 ## Stream Deck (Photo Station)
 
