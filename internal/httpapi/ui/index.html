@@ -130,6 +130,7 @@ pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-hei
         <button class="btn" id="add-rfid">+ RFID-Reader</button>
         <button class="btn" id="add-camera">+ Kamera</button>
         <button class="btn" id="add-streamdeck">+ Stream Deck</button>
+        <button class="btn" id="add-lift">+ Lagerlift</button>
         <button class="btn" id="rescan">Ports neu suchen</button>
         <span class="muted small" id="ports-info"></span>
       </div>
@@ -214,6 +215,11 @@ function fmtLast(d) {
     const age = l.ts ? Math.round((Date.now() - Date.parse(l.ts)) / 1000) : null;
     return `${esc(l.model)}${l.serial ? " #" + esc(l.serial) : ""}<div class="muted small">${age === null ? "noch keine Taste gedrückt" : `Taste ${l.key + 1}${l.action ? " (" + esc(l.action) + ")" : " ohne Aktion"} vor ${age}s`}</div>`;
   }
+  if (d.kind === "lift" && (l.type || l.status)) {
+    const st = l.status || {};
+    const where = !st.ts ? "" : !st.host_menu ? "nicht im Host-Menü" : st.busy || !st.in_position ? "fährt" : st.tray ? `Träger ${st.tray} in der Öffnung` : "Öffnung leer";
+    return `${esc(where)}${l.target ? ` · angefordert: Träger ${l.target}` : ""}<div class="muted small">${esc(l.type || "")}${l.trays ? " · " + l.trays + " Träger" : ""}${l.version ? " · Host-Schnittstelle " + esc(l.version) : ""}</div>`;
+  }
   if (d.kind === "printer" && l.ts) {
     const age = Math.round((Date.now() - Date.parse(l.ts)) / 1000);
     return `letzter Druck vor ${age}s<div class="muted small">${esc(l.title || "")} · ${esc(l.format)} · ${l.bytes} Bytes</div>`;
@@ -233,6 +239,12 @@ function fmtStats(s) {
     if (s.last_capture_ms) parts.push(`zuletzt ${(s.last_capture_ms / 1000).toFixed(1)} s`);
     if (s.reopens) parts.push(`${s.reopens}× neu verbunden`);
     if (s.failures) parts.push(`${s.failures} Fehler${s.last_error ? " („" + esc(s.last_error) + "“)" : ""}`);
+    return `<div class="muted small">${parts.join(" · ")}</div>`;
+  }
+  if (typeof s.fetches === "number") {
+    const parts = [`${s.fetches} Fahrten`];
+    if (s.last_ms) parts.push(`zuletzt ${(s.last_ms / 1000).toFixed(1)} s`);
+    if (s.failures) parts.push(`${s.failures} fehlgeschlagen${s.last_error ? " („" + esc(s.last_error) + "“)" : ""}`);
     return `<div class="muted small">${parts.join(" · ")}</div>`;
   }
   if (typeof s.presses === "number") {
@@ -512,7 +524,7 @@ function renderDevices() {
           <datalist id="dc-${i}">${(cameraChoices[d.id] || []).map((o) => `<option value="${esc(o)}">`).join("")}</datalist></label>
         <label>Live-Bild: Bilder pro Sekunde<input data-f="live_fps" type="number" min="1" max="30" value="${d.live_fps || 15}"></label>
         <label>Live-Bild der Kamera ohne Zuschauer noch (s)<input data-f="live_hold_s" type="number" min="0" max="600" value="${d.live_hold_s || 30}"></label>
-        <p class="muted small" style="grid-column:1/-1">${d.driver === "simulator" ? "Simulator: Testbild statt Kamera, zum Ausprobieren der Photo Station." : "Kamera per USB (libgphoto2, z.B. Canon EOS); die erste gefundene Kamera wird verwendet. Fotos landen im RAM der Kamera, nicht auf der Karte. Die Kamera darf nur ein Programm gleichzeitig benutzen: die Flask-App vorher beenden."} »Testen« zeigt Modell, Akku, die Bildqualitäten der Kamera (Auswahl im Feld oben) und ein Live-Bild. Für die Photo Station reicht eine JPEG-Stufe um 2000–3000 px (z.B. „Small Fine JPEG“), größere Fotos machen nur den Upload langsamer.</p>` : d.kind === "streamdeck" ? deckFields(d) : d.kind === "terminal" ? `
+        <p class="muted small" style="grid-column:1/-1">${d.driver === "simulator" ? "Simulator: Testbild statt Kamera, zum Ausprobieren der Photo Station." : "Kamera per USB (libgphoto2, z.B. Canon EOS); die erste gefundene Kamera wird verwendet. Fotos landen im RAM der Kamera, nicht auf der Karte. Die Kamera darf nur ein Programm gleichzeitig benutzen: die Flask-App vorher beenden."} »Testen« zeigt Modell, Akku, die Bildqualitäten der Kamera (Auswahl im Feld oben) und ein Live-Bild. Für die Photo Station reicht eine JPEG-Stufe um 2000–3000 px (z.B. „Small Fine JPEG“), größere Fotos machen nur den Upload langsamer.</p>` : d.kind === "streamdeck" ? deckFields(d) : d.kind === "lift" ? liftFields(d) : d.kind === "terminal" ? `
         <label>Terminal (IP:Port im LAN)<input data-f="address" value="${esc(d.address)}" placeholder="192.168.1.50:80"></label>
         <label>Lokaler Port<input data-f="local_port" type="number" min="1" max="65535" value="${d.local_port || ""}"></label>
         <p class="muted small" style="grid-column:1/-1">Die Kasse verbindet sich mit <code>ws://127.0.0.1:${d.local_port || "PORT"}</code>, die Bridge reicht die Verbindung unverändert ans Terminal weiter. Im POS Profile als Terminal-IP <code>127.0.0.1</code> und als Port <code>${d.local_port || "PORT"}</code> eintragen. Angenommen werden nur Verbindungen von den erlaubten Origins; das Ziel muss im eigenen Netz liegen.</p>` : `<p class="muted small" style="grid-column:1/-1">Geräteklasse ${esc(d.kind)}: Einstellungen folgen mit dem Treiber (Scanner Phase 3). Bis dahin nur ID und Treiber.</p>`}
@@ -537,10 +549,11 @@ function onDeviceEdit(ev) {
     case "driver":
       d.driver = v;
       // Beim Drucker hängen die Felder am Anschluss.
-      if (d.kind === "printer" && ev.type === "change") renderDevices();
+      if ((d.kind === "printer" || d.kind === "lift") && ev.type === "change") renderDevices();
       return;
     case "address": d.address = v.trim(); return;
     case "local_port": d.local_port = parseInt(v, 10) || 0; return;
+    case "host_id": case "drive_timeout_s": d[f] = parseInt(v, 10) || 0; return;
     case "queue": d.queue = v.trim(); return;
     case "uri": d.uri = v.trim(); return;
     case "media": d.media = v.trim(); return;
@@ -585,6 +598,17 @@ $("c-devices").addEventListener("click", async (ev) => {
     pre.textContent = `→ ${cmd}\n${text}\n\n` + pre.textContent.replace(`→ ${cmd}\n…\n`, "");
     return;
   }
+  if (btn.dataset.act === "lift-fetch") {
+    const out = card.querySelector('[data-out="lift"]');
+    const tray = parseInt(card.querySelector('[data-lift="tray"]').value, 10);
+    if (!tray) return;
+    out.innerHTML = `<span class="muted">Träger ${tray} kommt…</span>`;
+    const r = await api("POST", `/api/devices/${encodeURIComponent(d.id)}/fetch`, { tray });
+    out.innerHTML = r.data.ok
+      ? `<div class="notice n-ok">Träger ${r.data.result.tray} steht in der Bedienöffnung (${(r.data.result.ms / 1000).toFixed(1)} s).</div>`
+      : `<div class="notice n-err">${esc((r.data.error || {}).message || "Fehler")} <span class="muted">[${esc((r.data.error || {}).code)}]</span></div>`;
+    return;
+  }
   if (btn.dataset.act === "deck-preset") {
     if ((d.keys || []).length && !confirm("Die bisherige Belegung ersetzen?")) return;
     d.keys = DECK_PRESETS[btn.dataset.preset].map((k) => ({ ...k }));
@@ -597,7 +621,7 @@ $("c-devices").addEventListener("click", async (ev) => {
     return;
   }
   const out = card.querySelector('[data-out="test"]');
-  out.innerHTML = `<span class="muted">${d.kind === "printer" ? "Drucke…" : d.kind === "terminal" ? "Verbinde…" : d.kind === "rfid" ? "Lese…" : d.kind === "camera" ? "Verbinde mit der Kamera…" : d.kind === "streamdeck" ? "Zeige die Tastennummern am Gerät…" : "Messe…"}</span>`;
+  out.innerHTML = `<span class="muted">${d.kind === "printer" ? "Drucke…" : d.kind === "terminal" ? "Verbinde…" : d.kind === "rfid" ? "Lese…" : d.kind === "camera" ? "Verbinde mit der Kamera…" : d.kind === "streamdeck" ? "Zeige die Tastennummern am Gerät…" : d.kind === "lift" ? "Frage den Lift…" : "Messe…"}</span>`;
   const r = await api("POST", `/api/devices/${encodeURIComponent(d.id)}/test`);
   if (r.data.ok) {
     const x = r.data.result;
@@ -611,6 +635,8 @@ $("c-devices").addEventListener("click", async (ev) => {
       ? cameraTestResult(d, x)
       : d.kind === "streamdeck"
       ? deckTestResult(x)
+      : d.kind === "lift"
+      ? liftTestResult(x)
       : `<div class="notice n-ok">Antwort: <b>${x.kg.toFixed(3)} kg</b> (roh „${esc(x.raw)}“)</div>`;
   } else {
     const e = r.data.error || {};
@@ -666,6 +692,22 @@ function onDeckKeyEdit(d, el) {
   if (el.dataset.kf === "action") el.title = DECK_ACTIONS[k.action] || "";
   for (const f of ["label", "action", "color"]) if (!k[f]) delete k[f];
   d.keys = d.keys.filter((x) => x.label || x.action || x.color).sort((a, b) => a.key - b.key);
+}
+// ---------- Lagerlift ----------
+function liftFields(d) {
+  const sim = d.driver === "simulator";
+  return `${sim ? "" : `<label>Steuerung (IP, Port 81 wenn weggelassen)<input data-f="address" value="${esc(d.address)}" placeholder="192.168.1.100"></label>`}
+        <label>Bedienöffnung (Host-ID)<input data-f="host_id" type="number" min="1" max="32767" value="${d.host_id || 1}"></label>
+        <label>Fahrt höchstens (s)<input data-f="drive_timeout_s" type="number" min="10" max="900" value="${d.drive_timeout_s || 120}"></label>
+        <div style="grid-column:1/-1"><label>Träger holen (gegen die gespeicherte Konfiguration)</label>
+          <div class="row"><input data-lift="tray" type="number" min="1" placeholder="z.B. 21" style="width:8em"><button class="btn" data-act="lift-fetch">Holen</button></div>
+          <div class="small" data-out="lift"></div></div>
+        <p class="muted small" style="grid-column:1/-1">${sim ? "Simulator: nachgebaute C3000 mit 24 Trägern, 0,4 s je Stellung – zum Ausprobieren der Desk-Seite." : "Kardex Remstar mit C3000-Steuerung (Megamat), HOST-CGI-Schnittstelle. Am Lift muss Parameter 400.1 „UDP for Host“ auf OFF stehen und der Lift im Host-Menü sein. Die Steuerung verträgt nur einen Host: kein zweites Programm (z.B. Power Pick) gleichzeitig verbinden."} Das ERPNext ruft <code>lift.fetch {tray: 21}</code> und bekommt die Antwort, sobald der Träger in der Bedienöffnung steht.</p>`;
+}
+function liftTestResult(x) {
+  const i = x.info || {}, s = x.status || {};
+  const where = !s.host_menu ? "Lift ist nicht im Host-Menü – Fahrbefehle gehen erst dort." : s.busy || !s.in_position ? "Lift fährt gerade." : s.tray ? `Träger ${s.tray} steht in der Bedienöffnung.` : "Kein Träger in der Bedienöffnung.";
+  return `<div class="notice ${s.host_menu ? "n-ok" : "n-warn"}">${esc(i.type || "Lift")}${i.trays ? ", " + i.trays + " Träger" : ""}${i.width_mm ? `, ${i.width_mm}×${i.depth_mm} mm` : ""}${i.version ? ", Host-Schnittstelle " + esc(i.version) : ""}. ${esc(where)}${s.opening_msg || s.machine_msg ? ` Meldung: ${s.opening_msg || ""} ${s.machine_msg || ""}` : ""}</div>`;
 }
 function deckTestResult(x) {
   const keys = x.keys || [];
@@ -741,6 +783,13 @@ $("add-camera").addEventListener("click", () => {
   const drv = drivers.camera || [];
   cfg.devices.push({ id: n ? `kamera${n + 1}` : "kamera", kind: "camera",
     driver: drv.includes("gphoto2") ? "gphoto2" : drv[0] || "gphoto2", port: {}, live_fps: 15, live_hold_s: 30 });
+  renderDevices();
+});
+$("add-lift").addEventListener("click", () => {
+  const n = cfg.devices.filter((d) => d.kind === "lift").length;
+  const drv = drivers.lift || [];
+  cfg.devices.push({ id: n ? `lift${n + 1}` : "lift", kind: "lift",
+    driver: drv.includes("kardex_c3000") ? "kardex_c3000" : drv[0] || "kardex_c3000", address: "", host_id: 1, port: {} });
   renderDevices();
 });
 $("add-streamdeck").addEventListener("click", () => {

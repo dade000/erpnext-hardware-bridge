@@ -101,6 +101,13 @@ type DeviceConfig struct {
 	Serial     string    `yaml:"serial,omitempty" json:"serial,omitempty"`
 	Brightness int       `yaml:"brightness,omitempty" json:"brightness,omitempty"`
 	Keys       []DeckKey `yaml:"keys,omitempty" json:"keys,omitempty"`
+
+	// Lift (Kardex C3000): Address ist die Steuerung im LAN (host, Port 81
+	// wenn weggelassen), HostID die Bedienöffnung (HI, 0 = 1) und
+	// DriveTimeoutS, wie lange ein Träger höchstens bis in die Öffnung
+	// brauchen darf (0 = 120 s).
+	HostID        int `yaml:"host_id,omitempty" json:"host_id,omitempty"`
+	DriveTimeoutS int `yaml:"drive_timeout_s,omitempty" json:"drive_timeout_s,omitempty"`
 }
 
 // DeckKey belegt eine Taste des Stream Decks. Key zählt von links oben
@@ -182,7 +189,7 @@ type BasicAuth struct {
 // Bekannte Treiber je Geräteklasse. Nicht enthaltene Treiber werden trotzdem
 // akzeptiert, damit eine Config aus einem neueren Build nicht beim Laden
 // scheitert; das Gerät meldet dann »Treiber nicht enthalten«.
-var knownKinds = map[string]bool{"scale": true, "camera": true, "scanner": true, "printer": true, "terminal": true, "rfid": true, "streamdeck": true}
+var knownKinds = map[string]bool{"scale": true, "camera": true, "scanner": true, "printer": true, "terminal": true, "rfid": true, "streamdeck": true, "lift": true}
 
 // Default liefert eine lauffähige Startkonfiguration ohne Geräte.
 func Default() *Config {
@@ -273,7 +280,7 @@ func (c *Config) Validate() error {
 		}
 		seen[d.ID] = true
 		if !knownKinds[d.Kind] {
-			errs = append(errs, fmt.Errorf("%s: kind %q unbekannt (scale, camera, scanner, printer, terminal, rfid, streamdeck)", where, d.Kind))
+			errs = append(errs, fmt.Errorf("%s: kind %q unbekannt (scale, camera, scanner, printer, terminal, rfid, streamdeck, lift)", where, d.Kind))
 		}
 		if d.Driver == "" {
 			errs = append(errs, fmt.Errorf("%s: driver fehlt", where))
@@ -368,6 +375,9 @@ func (c *Config) Validate() error {
 		if d.Kind == "streamdeck" {
 			errs = append(errs, checkDeck(where, d)...)
 		}
+		if d.Kind == "lift" {
+			errs = append(errs, checkLift(where, d)...)
+		}
 		if d.Kind == "scale" {
 			if d.PollMS < 50 || d.PollMS > 10_000 {
 				errs = append(errs, fmt.Errorf("%s: poll_ms muss zwischen 50 und 10000 liegen", where))
@@ -435,6 +445,29 @@ func checkDeck(where string, d DeviceConfig) []error {
 		if len([]rune(k.Label)) > 40 {
 			errs = append(errs, fmt.Errorf("%s: Beschriftung zu lang (höchstens 40 Zeichen)", name))
 		}
+	}
+	return errs
+}
+
+func checkLift(where string, d DeviceConfig) []error {
+	var errs []error
+	if d.Driver != "simulator" {
+		host := strings.TrimSpace(d.Address)
+		if h, port, err := net.SplitHostPort(host); err == nil {
+			host = h
+			if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+				errs = append(errs, fmt.Errorf("%s: address %q hat keinen gültigen Port", where, d.Address))
+			}
+		}
+		if host == "" || strings.ContainsAny(host, "/ ") {
+			errs = append(errs, fmt.Errorf("%s: address fehlt (IP der Steuerung, z.B. 192.168.1.100 oder 192.168.1.100:81)", where))
+		}
+	}
+	if d.HostID < 0 || d.HostID > 0x7fff {
+		errs = append(errs, fmt.Errorf("%s: host_id %d ungültig (1 = erste Bedienöffnung)", where, d.HostID))
+	}
+	if d.DriveTimeoutS < 0 || d.DriveTimeoutS > 900 || d.DriveTimeoutS > 0 && d.DriveTimeoutS < 10 {
+		errs = append(errs, fmt.Errorf("%s: drive_timeout_s muss zwischen 10 und 900 liegen (0 = 120)", where))
 	}
 	return errs
 }

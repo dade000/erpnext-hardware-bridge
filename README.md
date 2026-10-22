@@ -147,6 +147,32 @@ dafür **aus** sein: eine Kamera kann nur ein Programm gleichzeitig öffnen.
    `http_compat` mit `listen: ":5000"` aktivieren; die Bridge beantwortet
    `/shot`, `/health` und `/reset` dann selbst.
 
+## Lagerlift Kardex (Megamat, C3000)
+
+Kardex-Remstar-Lift mit C3000-Steuerung über die HOST-CGI-Schnittstelle
+(HTTP auf Port 81 der Steuerung, Handbuch „HOST CGI Interface“ 1.14.2). Das
+Desk fordert einen Träger an und bekommt die Antwort, sobald er in der
+Bedienöffnung steht:
+
+```js
+const r = await hw.fetchTray(21);   // {tray: 21, arrived: true, ms: 8400}
+```
+
+Voraussetzungen am Lift: Parameter 400.1 „UDP for Host“ = OFF (Werkseinstellung)
+und der Lift im Host-Menü. Die Steuerung verträgt nur einen Host gleichzeitig.
+
+```yaml
+- id: megamat
+  kind: lift
+  driver: kardex_c3000    # oder simulator (nachgebaute C3000, 24 Träger)
+  address: 192.168.1.100  # Port 81, wenn weggelassen
+  host_id: 1              # Bedienöffnung (HI)
+  drive_timeout_s: 120
+```
+
+In der Oberfläche zeigt »Testen« Maschinentyp, Trägerzahl und den Träger in
+der Öffnung; „Träger holen“ fährt einen Träger zum Ausprobieren an.
+
 ## Stream Deck (Photo Station)
 
 Elgato Stream Deck MK.2 oder Original V2 (15 Tasten), bisher nur unter Linux

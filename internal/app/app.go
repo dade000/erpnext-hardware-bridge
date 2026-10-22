@@ -18,6 +18,7 @@ import (
 	"erpnext-hardware-bridge/internal/config"
 	"erpnext-hardware-bridge/internal/device"
 	"erpnext-hardware-bridge/internal/httpapi"
+	"erpnext-hardware-bridge/internal/lift/kardex"
 	"erpnext-hardware-bridge/internal/logbuf"
 	"erpnext-hardware-bridge/internal/netutil"
 	"erpnext-hardware-bridge/internal/printer"
@@ -73,6 +74,8 @@ func New(path string, cfg *config.Config, exists bool, log *slog.Logger, level *
 	a.mgr.Register(camera.Kind, "simulator", camera.New(simulator.Open))
 	a.mgr.Register(streamdeck.Kind, "elgato", streamdeck.New)
 	a.mgr.Register(streamdeck.Kind, "simulator", streamdeck.NewSimulator)
+	a.mgr.Register(kardex.Kind, "kardex_c3000", kardex.New)
+	a.mgr.Register(kardex.Kind, "simulator", kardex.NewSimulator)
 	registerOptional(a.mgr) // Kamera über libgphoto2 (nur Linux)
 	a.ws = ws.NewServer(a.Config, a.mgr, a.bus, log)
 	level.Set(logbuf.ParseLevel(cfg.LogLevel))

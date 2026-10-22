@@ -33,6 +33,8 @@
  *   const shot = await hw.capture();           // {blob, width, height, bytes, ms}
  *   hw.on("streamdeck.key", (k) => …);          // {key, action, label, ts} – nur mit subscribe("streamdeck")
  *   hw.subscribe("streamdeck");                // solange die Seite sichtbar ist; sonst sind die Tasten grau
+ *   await hw.fetchTray(21);                    // Lagerlift: {tray, arrived, ms}, erst wenn Träger 21 in der Öffnung steht
+ *   hw.on("lift.status", (s) => …);            // {tray, in_position, busy, host_menu, target} – nur mit subscribe("lift")
  *
  * Bilder kommen als Binärframe (kein Base64): 4 Byte Länge des JSON-Kopfs,
  * der Kopf wie eine normale Nachricht, danach die Nutzlast. Der Client hängt
@@ -54,6 +56,9 @@
 	var PRINT_TIMEOUT_MS = 25000;
 	// Auslösen inkl. Fokus und Übertragung des Fotos von der Kamera.
 	var CAPTURE_TIMEOUT_MS = 30000;
+	// Lagerlift: die Bridge wartet selbst bis zu drive_timeout_s (Vorgabe
+	// 120 s), bis der Träger in der Bedienöffnung steht.
+	var LIFT_TIMEOUT_MS = 180000;
 	var BACKOFF_MS = [1000, 2000, 5000, 10000, 30000];
 
 	function HardwareBridge(opts) {
@@ -335,6 +340,21 @@
 	 */
 	P.capture = function (device) {
 		return this.call("camera.capture", device ? { device: device } : {}, CAPTURE_TIMEOUT_MS);
+	};
+
+	/**
+	 * Träger am Lagerlift holen. Das Promise erfüllt sich erst, wenn der
+	 * Träger in der Bedienöffnung steht: {tray, arrived: true, ms}. Fehler:
+	 * not_host_menu, timeout, superseded (inzwischen anderer Träger
+	 * angefordert), lift_error, device_offline. opts: {device, light_from,
+	 * light_to, timeout_s}.
+	 */
+	P.fetchTray = function (tray, opts) {
+		var params = { tray: tray };
+		opts = opts || {};
+		for (var k in opts) if (Object.prototype.hasOwnProperty.call(opts, k)) params[k] = opts[k];
+		var ms = opts.timeout_s ? opts.timeout_s * 1000 + 15000 : LIFT_TIMEOUT_MS;
+		return this.call("lift.fetch", params, ms);
 	};
 
 	/** Kommando senden. Liefert ein Promise; Fehler haben {code, message}. */

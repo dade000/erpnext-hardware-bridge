@@ -249,3 +249,31 @@ devices:
 		}
 	}
 }
+
+func TestValidateLift(t *testing.T) {
+	ok := func(d DeviceConfig) error {
+		c := Default()
+		d.ID, d.Kind = "lift", "lift"
+		c.Devices = []DeviceConfig{d}
+		return c.Validate()
+	}
+	for _, d := range []DeviceConfig{
+		{Driver: "kardex_c3000", Address: "192.168.1.100"},
+		{Driver: "kardex_c3000", Address: "192.168.1.100:81", HostID: 2, DriveTimeoutS: 60},
+		{Driver: "simulator"},
+	} {
+		if err := ok(d); err != nil {
+			t.Errorf("%+v: %v", d, err)
+		}
+	}
+	for _, d := range []DeviceConfig{
+		{Driver: "kardex_c3000"},
+		{Driver: "kardex_c3000", Address: "192.168.1.100:0"},
+		{Driver: "kardex_c3000", Address: "192.168.1.100", DriveTimeoutS: 5},
+		{Driver: "kardex_c3000", Address: "192.168.1.100", HostID: -1},
+	} {
+		if err := ok(d); err == nil {
+			t.Errorf("%+v: kein Fehler", d)
+		}
+	}
+}

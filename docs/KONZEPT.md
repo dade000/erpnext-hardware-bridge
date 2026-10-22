@@ -1058,3 +1058,48 @@ Geprüft: Unit-Tests mit nachgebautem MK.2 (Reports, Ereignisse, Grau/Farbe
 nach Abonnenten, Abziehen → offline, Logo beim Beenden), WS-Test mit dem
 Simulator. Offen: echtes Gerät (Bildausrichtung, Firmware-/Seriennummer-
 Offsets, Wiederverbinden nach Abziehen).
+
+## 25. Lagerlift Kardex Megamat (2026-10-22)
+
+Wunsch (Daniel, 2026-10-22): das ERP sagt »Fach 21« und bekommt die
+Rückmeldung, wenn es da ist. Grundlage: Kardex-Remstar-Handbuch „HOST CGI
+Interface“ 1.14.2 (C3000/Logicontrol). Megamat = VCM (vertikales
+Umlaufregal); „Fach“ = Träger (Tablar) im Sinne der Steuerung.
+
+* **Gerät.** Klasse `lift`, Treiber `kardex_c3000` und `simulator`. Felder:
+  `address` (Steuerung, Port 81 wenn weggelassen), `host_id` (HI der
+  Bedienöffnung, Vorgabe 1), `drive_timeout_s` (Vorgabe 120).
+* **Protokoll.** HTTP-GET auf `/cgi-bin/setValues.exe`, `OrderValues.exe`,
+  `ReadFile.exe`, alle Werte in DB904 im Format `x`. IN-Parameter mit
+  Gültigkeitsbit (MSB), nicht benutzte IN-Parameter werden ausdrücklich
+  ungültig (0) geschrieben, damit kein Wert eines früheren Kommandos stehen
+  bleibt. Ablauf je Kommando: warten bis `CMD` (DBW2) 0 ist, IN-Parameter und
+  zuletzt `CMD` in einem `setValues`, pollen bis `CMD` wieder 0 ist, dann
+  `RET` (DBD4: oberes Wort Kommando, unteres Status). Leselisten werden
+  einmal bestellt und nach einem Neustart der Steuerung (leere ReadFile-
+  Antwort) neu bestellt. Ein Kommando zur Zeit.
+* **Holen.** `lift.fetch {tray, light_from?, light_to?, wait?, timeout_s?}`
+  schickt DriveTray (0x0003, TrayLower = Träger, optional Positionslampen)
+  und pollt GetDoorStatus (0x0002), bis `CurShelfBase` = Träger,
+  `ShelfBasePosFlag` = 1 und weder Maschine noch Öffnung beschäftigt sind.
+  Erst dann kommt die Antwort `{tray, arrived, ms}` und das Event
+  `lift.arrived`. „Letzter Host-Befehl läuft noch“ (25) und „Host-Funktion
+  beschäftigt“ (0xFFF9) werden kurz wiederholt. Eine neue Anforderung löst
+  die laufende ab (deren Aufrufer bekommt `superseded`). `wait: false`
+  antwortet nach der Annahme, die Ankunft kommt nur als Event.
+* **Weitere Kommandos.** `lift.status` (Info + Öffnung), `lift.confirm` /
+  `lift.cancel` (F6/F1 am Bedienteil), `lift.display {lines}` (SetAlphaText,
+  4 × 20 Zeichen, Umlaute umschrieben, reservierte Zeichen als %XX).
+* **Events** an Abonnenten: `lift.status` bei jeder Änderung (abonniert:
+  Abfrage jede Sekunde, sonst alle 10 s), `lift.arrived`, `lift.failed`.
+* **Zustand.** Nicht erreichbar → offline mit Backoff; nicht im Host-Menü
+  (0xFFFB) → online mit Hinweis, `lift.fetch` liefert `not_host_menu`.
+
+Geprüft: Unit-Tests gegen eine nachgebaute C3000 (`fakec3000`: Handshake,
+Listen, Umlauf auf kürzestem Weg, Host-Menü, Neustart), WS-Test mit dem
+Simulator, Oberfläche im Browser. **Offen: echter Lift.** Unbestätigt sind
+vor allem: ob der Megamat 180 `CurShelfBase`/`ShelfBasePosFlag` wie
+beschrieben setzt (das Handbuch markiert die VCM-Spalte), wie die Saia-PCD3
+die HTTP-Antworten rahmt (Go-HTTP-Client, Beispiele im Handbuch sehen normal
+aus), die Bedeutung der Lampen-Nummern und ob Strings im Format `n` so
+geschrieben werden.
