@@ -49,7 +49,11 @@ type DoorStatus struct {
 	// Tray: Träger in der Bedienöffnung, 0 = keiner bzw. unterwegs.
 	Tray       int  `json:"tray"`
 	InPosition bool `json:"in_position"`
-	Busy       bool `json:"busy"`
+	// Busy: Maschine fährt (MachineBusy). OpeningBusy: für diese Öffnung
+	// läuft oder wartet ein Auftrag – das kann auch noch gelten, wenn der
+	// Träger schon in der Öffnung steht, deshalb zählt es nicht für die Ankunft.
+	Busy        bool `json:"busy"`
+	OpeningBusy bool `json:"opening_busy,omitempty"`
 	// HostMenu false: der Lift steht nicht im Host-Menü, Fahrbefehle gehen
 	// nicht. Die übrigen Felder sind dann ohne Bedeutung.
 	HostMenu   bool      `json:"host_menu"`
@@ -123,7 +127,49 @@ type run struct {
 // New baut den Treiber für einen echten Lift.
 func New(cfg config.DeviceConfig, bus *device.Bus, log *slog.Logger) device.Device {
 	addr := Address(cfg.Address)
-	return newLift(cfg, bus, log, addr, func(context.Context) (*Client, error) { return NewClient(addr), nil })
+	return newLift(cfg, bus, log, addr, func(ctx context.Context) (*Client, error) {
+		// Mehrere Bedienöffnungen derselben Steuerung teilen sich einen
+		// Client: CMD/RET gibt es nur einmal, Kommandos dürfen sich nicht
+		// überholen.
+		c := shared(addr, func(msg string, args ...any) { log.Debug(msg, args...) })
+		go func() { <-ctx.Done(); release(addr) }()
+		return c, nil
+	})
+}
+
+var (
+	sharedMu sync.Mutex
+	clients  = map[string]*sharedClient{}
+)
+
+type sharedClient struct {
+	c    *Client
+	refs int
+}
+
+// shared liefert den Client der Steuerung; debug gilt nur für den, der ihn
+// anlegt (das Log trägt dann dessen Geräte-ID).
+func shared(addr string, debug func(msg string, args ...any)) *Client {
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	sc := clients[addr]
+	if sc == nil {
+		sc = &sharedClient{c: NewClient(addr)}
+		sc.c.debug = debug
+		clients[addr] = sc
+	}
+	sc.refs++
+	return sc.c
+}
+
+func release(addr string) {
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if sc := clients[addr]; sc != nil {
+		if sc.refs--; sc.refs <= 0 {
+			delete(clients, addr)
+		}
+	}
 }
 
 // Address ergänzt den Standardport 81.
@@ -334,7 +380,8 @@ func (l *Lift) doorStatus(ctx context.Context, cli *Client) (DoorStatus, error) 
 	auto, _ := v.Get(tagAutomaticMode)
 	om, _ := v.Get(tagOpeningMsg)
 	mm, _ := v.Get(tagMachineMsg)
-	ds.Busy = busy == 1 || ob == 1
+	ds.Busy = busy == 1
+	ds.OpeningBusy = ob == 1
 	ds.Tray = int(tray)
 	ds.InPosition = pos == 1
 	ds.Automatic = auto == 1

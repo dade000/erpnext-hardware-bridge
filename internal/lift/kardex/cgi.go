@@ -210,6 +210,10 @@ type Client struct {
 	// zurücksetzt. Das ist die Annahme des Kommandos, nicht die Fahrt.
 	cmdTimeout time.Duration
 
+	// debug bekommt jede Anfrage samt Antwort (Log-Stufe debug), für die
+	// Inbetriebnahme am echten Lift.
+	debug func(msg string, args ...any)
+
 	exec  sync.Mutex // ein Kommando zur Zeit
 	mu    sync.Mutex
 	lists map[string]string // Tag-Liste → Listenname (OrderValues)
@@ -245,6 +249,9 @@ func (c *Client) get(ctx context.Context, path, query string) (string, error) {
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
 		return "", err
+	}
+	if c.debug != nil {
+		c.debug("CGI", "path", path, "query", query, "status", resp.StatusCode, "body", short(string(b)))
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("%s: HTTP %d", path, resp.StatusCode)
@@ -429,9 +436,9 @@ func cgiText(s string, n int) string {
 }
 
 func short(s string) string {
-	s = strings.TrimSpace(s)
-	if len(s) > 80 {
-		return s[:80] + "…"
+	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " | ")
+	if len(s) > 300 {
+		return s[:300] + "…"
 	}
 	return s
 }

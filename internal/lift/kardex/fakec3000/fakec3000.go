@@ -30,26 +30,37 @@ type Machine struct {
 	Step time.Duration
 	// CmdDelay: so lange braucht die Steuerung, bis sie CMD auf 0 setzt.
 	CmdDelay time.Duration
+	// OpeningBusyAtRest: OpeningBusy bleibt 1, auch wenn der Träger steht
+	// (Auftrag in der Öffnung, bis jemand quittiert) – das Handbuch lässt
+	// offen, ob das vorkommt.
+	OpeningBusyAtRest bool
 
-	mu       sync.Mutex
-	trays    int
-	cur      int // Träger in der Bedienöffnung, 0 = unterwegs
-	pos      int // Stellung des Umlaufs (Träger vor der Öffnung)
-	target   int
-	hostMenu bool
-	mem      map[string]uint32
-	strs     map[int]string
-	lists    map[string][]string
-	drives   []int
-	requests int
-	stop     chan struct{}
+	mu         sync.Mutex
+	trays      int
+	openings   int
+	pos        int // Stellung des Umlaufs: Träger vor Öffnung 1
+	target     int // Zielstellung
+	moving     bool
+	hostMenu   bool
+	mem        map[string]uint32
+	strs       map[int]string
+	lists      map[string][]string
+	drives     []int
+	requests   int
+	collisions int
+	stop       chan struct{}
 }
 
-// New baut eine Maschine mit trays Trägern; Träger 1 steht in der Öffnung.
-func New(trays int) *Machine {
+// New baut eine Maschine mit trays Trägern und einer Bedienöffnung;
+// Träger 1 steht in der Öffnung.
+func New(trays int) *Machine { return NewWithOpenings(trays, 1) }
+
+// NewWithOpenings: mehrere Öffnungen am selben Umlauf, gleichmäßig verteilt
+// (bei zweien gegenüber: vor Öffnung 2 steht der Träger trays/2 weiter).
+func NewWithOpenings(trays, openings int) *Machine {
 	return &Machine{
 		Step: 200 * time.Millisecond, CmdDelay: 20 * time.Millisecond,
-		trays: trays, cur: 1, pos: 1, hostMenu: true,
+		trays: trays, openings: openings, pos: 1, hostMenu: true,
 		mem: map[string]uint32{}, strs: map[int]string{}, lists: map[string][]string{},
 		stop: make(chan struct{}),
 	}
@@ -80,11 +91,23 @@ func (m *Machine) Restart() {
 	m.mu.Unlock()
 }
 
-// Current liefert den Träger in der Öffnung (0 = unterwegs).
-func (m *Machine) Current() int {
+// Current liefert den Träger in Öffnung 1 (0 = unterwegs).
+func (m *Machine) Current() int { return m.CurrentAt(1) }
+
+// CurrentAt liefert den Träger in Öffnung hi (0 = unterwegs).
+func (m *Machine) CurrentAt(hi int) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.cur
+	return m.trayAt(hi)
+}
+
+func (m *Machine) offset(hi int) int { return (hi - 1) * m.trays / m.openings }
+
+func (m *Machine) trayAt(hi int) int {
+	if m.moving {
+		return 0
+	}
+	return (m.pos-1+m.offset(hi))%m.trays + 1
 }
 
 // Drives liefert die angeforderten Träger in Reihenfolge.
@@ -99,6 +122,13 @@ func (m *Machine) Text(off int) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.strs[off]
+}
+
+// Collisions zählt CMD-Schreibzugriffe, während noch ein Kommando lief.
+func (m *Machine) Collisions() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.collisions
 }
 
 // Requests zählt HTTP-Anfragen.
@@ -186,6 +216,11 @@ func (m *Machine) setValues(q string) error {
 		if err != nil {
 			return fmt.Errorf("Wert %q: %v", val, err)
 		}
+		if mm[1] == "W" && off == 2 && n != 0 && m.mem[key("W", 2)] != 0 {
+			// Ein Host schreibt CMD, während die Steuerung noch am vorigen
+			// Kommando ist: das Handbuch verbietet das (nur ein Host).
+			m.collisions++
+		}
 		m.mem[key(mm[1], off)] = uint32(n)
 		if mm[1] == "W" && off == 2 && n != 0 {
 			cmd := uint16(n)
@@ -225,32 +260,39 @@ func (m *Machine) run(cmd uint16) uint16 {
 	if !m.hostMenu {
 		return 0xFFFB
 	}
+	hi := 1
 	if cmd != 0x01 && cmd != 0x08 {
-		if hi, ok := m.in("W", 100); !ok || hi != 1 {
+		v, ok := m.in("W", 100)
+		if !ok || v < 1 || int(v) > m.openings {
 			return 1
 		}
+		hi = int(v)
 	}
 	switch cmd {
 	case 0x01:
 		m.d(110, 0x010E02)
 	case 0x08:
 		m.w(138, 5)
-		m.w(140, 1)
+		m.w(140, uint32(m.openings))
 		m.d(142, uint32(m.trays))
 		m.d(146, 2450)
 		m.d(150, 540)
 	case 0x02:
 		busy := uint32(0)
-		if m.cur == 0 {
+		if m.moving {
 			busy = 1
 		}
 		m.w(114, busy)
-		m.d(116, uint32(m.cur))
+		m.d(116, uint32(m.trayAt(hi)))
 		m.w(120, 1-busy)
 		m.d(102, 0)
 		m.d(106, 0)
-		m.w(618, 1)
-		m.w(620, busy)
+		m.w(618, uint32(hi))
+		if m.OpeningBusyAtRest {
+			m.w(620, 1)
+		} else {
+			m.w(620, busy)
+		}
 		m.w(634, 1)
 	case 0x03:
 		tray, ok := m.in("D", 126)
@@ -260,13 +302,13 @@ func (m *Machine) run(cmd uint16) uint16 {
 		if int(tray) > m.trays {
 			return 10
 		}
-		if m.cur == 0 {
+		if m.moving {
 			return 25
 		}
 		m.drives = append(m.drives, int(tray))
-		if int(tray) != m.cur {
-			m.target = int(tray)
-			m.cur = 0
+		if int(tray) != m.trayAt(hi) {
+			m.target = (int(tray)-1-m.offset(hi)+m.trays)%m.trays + 1
+			m.moving = true
 			go m.rotate()
 		}
 	case 0x05, 0x06, 0x09:
@@ -286,7 +328,7 @@ func (m *Machine) rotate() {
 		}
 		m.mu.Lock()
 		if m.pos == m.target {
-			m.cur = m.pos
+			m.moving = false
 			m.mu.Unlock()
 			return
 		}

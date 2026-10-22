@@ -1081,7 +1081,8 @@ Umlaufregal); „Fach“ = Träger (Tablar) im Sinne der Steuerung.
 * **Holen.** `lift.fetch {tray, light_from?, light_to?, wait?, timeout_s?}`
   schickt DriveTray (0x0003, TrayLower = Träger, optional Positionslampen)
   und pollt GetDoorStatus (0x0002), bis `CurShelfBase` = Träger,
-  `ShelfBasePosFlag` = 1 und weder Maschine noch Öffnung beschäftigt sind.
+  `ShelfBasePosFlag` = 1 und `MachineBusy` = 0. `OpeningBusy` zählt bewusst
+  nicht: es kann noch 1 sein, während der Träger schon steht.
   Erst dann kommt die Antwort `{tray, arrived, ms}` und das Event
   `lift.arrived`. „Letzter Host-Befehl läuft noch“ (25) und „Host-Funktion
   beschäftigt“ (0xFFF9) werden kurz wiederholt. Eine neue Anforderung löst
@@ -1092,6 +1093,15 @@ Umlaufregal); „Fach“ = Träger (Tablar) im Sinne der Steuerung.
   4 × 20 Zeichen, Umlaute umschrieben, reservierte Zeichen als %XX).
 * **Events** an Abonnenten: `lift.status` bei jeder Änderung (abonniert:
   Abfrage jede Sekunde, sonst alle 10 s), `lift.arrived`, `lift.failed`.
+* **Mehrere Bedienöffnungen.** Je Öffnung ein Gerät mit eigener `host_id`.
+  Geräte mit derselben Steuerungsadresse teilen sich in der Bridge einen
+  Client, Kommandos laufen nacheinander (CMD/RET gibt es nur einmal). Dieselbe
+  Öffnung zweimal einzurichten lehnt die Konfiguration ab. **Nicht gelöst:**
+  zwei Bridges (zwei PCs) gegen dieselbe Steuerung – die C3000 kennt nur
+  einen Host, die Kommandos können sich dann überholen. Ein Lift = eine
+  Bridge, die anderen Stationen müssten über sie gehen.
+* **Inbetriebnahme.** Mit `log_level: debug` steht jede CGI-Anfrage samt
+  Antwort im Log.
 * **Zustand.** Nicht erreichbar → offline mit Backoff; nicht im Host-Menü
   (0xFFFB) → online mit Hinweis, `lift.fetch` liefert `not_host_menu`.
 

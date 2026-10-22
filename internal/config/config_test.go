@@ -277,3 +277,18 @@ func TestValidateLift(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateLiftSameOpeningTwice(t *testing.T) {
+	c := Default()
+	c.Devices = []DeviceConfig{
+		{ID: "oben", Kind: "lift", Driver: "kardex_c3000", Address: "192.168.1.100", HostID: 1},
+		{ID: "unten", Kind: "lift", Driver: "kardex_c3000", Address: "192.168.1.100:81", HostID: 2},
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("zwei Öffnungen: %v", err)
+	}
+	c.Devices[1].HostID = 0 // = 1
+	if err := c.Validate(); err == nil {
+		t.Fatal("doppelte Öffnung nicht erkannt")
+	}
+}

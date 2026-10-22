@@ -265,6 +265,7 @@ func (c *Config) Validate() error {
 	}
 	seen := map[string]bool{}
 	localPorts := map[int]string{}
+	liftOpenings := map[string]string{}
 	for i, d := range c.Devices {
 		where := fmt.Sprintf("Gerät %d", i+1)
 		if d.ID != "" {
@@ -377,6 +378,13 @@ func (c *Config) Validate() error {
 		}
 		if d.Kind == "lift" {
 			errs = append(errs, checkLift(where, d)...)
+			if d.Driver != "simulator" {
+				key := liftKey(d)
+				if other := liftOpenings[key]; other != "" {
+					errs = append(errs, fmt.Errorf("%s: dieselbe Bedienöffnung (host_id) derselben Steuerung ist schon %q", where, other))
+				}
+				liftOpenings[key] = d.ID
+			}
 		}
 		if d.Kind == "scale" {
 			if d.PollMS < 50 || d.PollMS > 10_000 {
@@ -447,6 +455,18 @@ func checkDeck(where string, d DeviceConfig) []error {
 		}
 	}
 	return errs
+}
+
+func liftKey(d DeviceConfig) string {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(d.Address))
+	if err != nil {
+		host, port = strings.Trim(strings.TrimSpace(d.Address), "[]"), "81"
+	}
+	hi := d.HostID
+	if hi == 0 {
+		hi = 1
+	}
+	return strings.ToLower(host) + ":" + port + "#" + strconv.Itoa(hi)
 }
 
 func checkLift(where string, d DeviceConfig) []error {
