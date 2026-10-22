@@ -276,12 +276,15 @@ func TestCGIText(t *testing.T) {
 	}
 }
 
-// Zwei Bedienöffnungen derselben Steuerung, gleichzeitig angefordert: beide
-// Träger kommen an ihrer Öffnung an, und die Kommandos überholen sich nie
-// (CMD wird nie geschrieben, solange die Steuerung noch arbeitet).
+// Zwei Bedienöffnungen derselben Steuerung: Während Öffnung 1 einen Träger
+// holt, fragt Öffnung 2 ständig ihren Stand ab. Die Kommandos dürfen sich nie
+// überholen (CMD wird nie geschrieben, solange die Steuerung noch arbeitet),
+// und danach holt Öffnung 2 ihren Träger. Gleichzeitige Fahrten an beiden
+// Öffnungen prüft der Test bewusst nicht: was der Umlauf dann tut, entscheidet
+// die echte Steuerung.
 func TestTwoOpeningsShareOneControl(t *testing.T) {
 	m := fakec3000.NewWithOpenings(24, 2)
-	m.Step = 10 * time.Millisecond
+	m.Step = 100 * time.Millisecond
 	srv := httptest.NewServer(m)
 	defer srv.Close()
 	defer m.Close()
@@ -299,25 +302,38 @@ func TestTwoOpeningsShareOneControl(t *testing.T) {
 	for _, l := range lifts {
 		waitFor(t, func() bool { return l.Status().State == device.StateOnline })
 	}
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	for i, tray := range []int{5, 20} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, errs[i] = call(lifts[i], "fetch", map[string]any{"tray": tray})
-		}()
-	}
-	wg.Wait()
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("Öffnung %d: %v", i+1, err)
+	stop := make(chan struct{})
+	polled := make(chan int)
+	go func() {
+		n := 0
+		defer func() { polled <- n }()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := call(lifts[1], "status", nil); err != nil {
+				t.Errorf("Stand an Öffnung 2: %v", err)
+				return
+			}
+			n++
 		}
+	}()
+	// 1 → 9: acht Stellungen, knapp eine Sekunde Fahrt.
+	if _, err := call(lifts[0], "fetch", map[string]any{"tray": 9}); err != nil {
+		t.Fatalf("Öffnung 1: %v", err)
 	}
-	// Die zweite Fahrt hat die erste ggf. weggedreht; am Ende steht
-	// mindestens der zuletzt gefahrene Träger an seiner Öffnung.
-	if m.CurrentAt(1) != 5 && m.CurrentAt(2) != 20 {
-		t.Fatalf("Öffnung 1: %d, Öffnung 2: %d", m.CurrentAt(1), m.CurrentAt(2))
+	close(stop)
+	if n := <-polled; n < 2 {
+		t.Fatalf("Öffnung 2 hat nur %d× abgefragt", n)
+	}
+	if m.CurrentAt(1) != 9 {
+		t.Fatalf("Öffnung 1: Träger %d", m.CurrentAt(1))
+	}
+	// Vor Öffnung 2 steht jetzt Träger 21; 22 ist eine Stellung weiter.
+	if _, err := call(lifts[1], "fetch", map[string]any{"tray": 22}); err != nil || m.CurrentAt(2) != 22 {
+		t.Fatalf("Öffnung 2: %v, Träger %d", err, m.CurrentAt(2))
 	}
 	if n := m.Collisions(); n != 0 {
 		t.Fatalf("%d Kommandos haben sich überholt", n)

@@ -37,9 +37,14 @@ type harness struct {
 	plug bool
 }
 
-func start(t *testing.T, power int) *harness {
+func start(t *testing.T, power int, prepare ...func(*fakereader.Reader)) *harness {
 	t.Helper()
 	h := &harness{fake: fakereader.New(), bus: device.NewBus(), plug: true}
+	// Vor dem Start, sonst verbindet der Treiber unter Last schon mit dem
+	// vorgegebenen Reader, bevor der Test ihn umstellt.
+	for _, p := range prepare {
+		p(h.fake)
+	}
 	cfg := config.DeviceConfig{ID: "rfid", Kind: "rfid", Driver: "metratec_uhf", Port: config.PortSpec{Path: "/dev/fake"},
 		Baud: 115200, PollMS: 100, PowerDBm: power}
 	h.r = metratec.NewWithOpener(cfg, h.bus, quiet, func() (serialport.Port, string, error) {
@@ -109,8 +114,7 @@ func TestSetup(t *testing.T) {
 }
 
 func TestWrongReader(t *testing.T) {
-	h := start(t, 0)
-	h.fake.Hardware("DeskID_NFC")
+	h := start(t, 0, func(f *fakereader.Reader) { f.Hardware("DeskID_NFC") })
 	waitState(t, h.r, device.StateError)
 }
 
