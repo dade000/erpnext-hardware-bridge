@@ -251,7 +251,7 @@ func (c *Client) get(ctx context.Context, path, query string) (string, error) {
 		return "", err
 	}
 	if c.debug != nil {
-		c.debug("CGI", "path", path, "query", query, "status", resp.StatusCode, "body", short(string(b)))
+		c.debug("CGI", "addr", strings.TrimPrefix(c.base, "http://"), "path", path, "query", query, "status", resp.StatusCode, "body", short(string(b)))
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("%s: HTTP %d", path, resp.StatusCode)

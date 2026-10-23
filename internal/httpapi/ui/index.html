@@ -158,7 +158,17 @@ pre.log { margin: 0; max-height: 70vh; overflow: auto; font-size: 12px; line-hei
   </div>
 
   <div id="tab-log" class="hidden">
-    <section class="panel"><pre class="log" id="log"></pre></section>
+    <section class="panel">
+      <div class="row" style="margin-bottom:8px">
+        <input id="log-filter" placeholder="Filter, z.B. lift oder WARN" style="flex:1" spellcheck="false">
+        <label class="check"><input type="checkbox" id="log-nodebug">Debug ausblenden</label>
+        <button class="btn" id="log-pause">Anhalten</button>
+        <button class="btn" id="log-copy">Kopieren</button>
+        <button class="btn" id="log-download">Herunterladen</button>
+      </div>
+      <div class="muted small" id="log-info" style="margin-bottom:6px"></div>
+      <pre class="log" id="log"></pre>
+    </section>
   </div>
 </main>
 
@@ -358,13 +368,71 @@ $("upd-rollback").addEventListener("click", async () => {
 });
 
 // ---------- Log ----------
-async function refreshLog() {
-  const r = await api("GET", "/api/logs");
+// Neu gezeichnet wird nur, wenn neue Zeilen da sind, nicht angehalten ist und
+// nichts im Log markiert ist – sonst ginge die Markierung beim Kopieren
+// verloren.
+let logLines = [], logShown = "", logPaused = false;
+function logVisible() {
+  const f = $("log-filter").value.trim().toLowerCase();
+  const nodebug = $("log-nodebug").checked;
+  return logLines.filter((l) => (!nodebug || !l.includes("level=DEBUG")) && (!f || l.toLowerCase().includes(f)));
+}
+function logSelected() {
+  const sel = window.getSelection();
+  return sel && !sel.isCollapsed && $("log").contains(sel.anchorNode);
+}
+function renderLog(force) {
   const el = $("log");
+  const held = logPaused || logSelected();
+  const lines = logVisible();
+  $("log-info").textContent = `${lines.length} von ${logLines.length} Zeilen` +
+    (logPaused ? " · angehalten" : held ? " · angehalten, solange etwas markiert ist" : "") +
+    " · vollständiges Log: bridge.log neben der bridge.yaml";
+  if (held && !force) return;
+  const text = lines.join("\n");
+  if (text === logShown) return;
   const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
-  el.textContent = (r.data || []).join("\n");
+  el.textContent = text;
+  logShown = text;
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
+async function refreshLog() {
+  if (logPaused) { renderLog(); return; }
+  const r = await api("GET", "/api/logs");
+  logLines = r.data || [];
+  renderLog();
+}
+$("log-filter").addEventListener("input", () => renderLog(true));
+$("log-nodebug").addEventListener("change", () => renderLog(true));
+$("log-pause").addEventListener("click", () => {
+  logPaused = !logPaused;
+  $("log-pause").textContent = logPaused ? "Weiter" : "Anhalten";
+  renderLog(!logPaused);
+});
+$("log-copy").addEventListener("click", async () => {
+  const text = logVisible().join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Ohne Clipboard-API (http, ältere Browser): über ein Textfeld.
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+  $("log-copy").textContent = "Kopiert ✓";
+  setTimeout(() => ($("log-copy").textContent = "Kopieren"), 1500);
+});
+$("log-download").addEventListener("click", () => {
+  const blob = new Blob([logVisible().join("\n") + "\n"], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `bridge-log-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.txt`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
 
 // ---------- Konfiguration ----------
 let cfg = null, cfgLoaded = false, ports = [], drivers = {}, queues = [];

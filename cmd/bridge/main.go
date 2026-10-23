@@ -35,11 +35,14 @@ type program struct {
 }
 
 func (p *program) Start(service.Service) error {
-	ring := logbuf.NewRing(500)
+	// Bei log_level debug kommen während einer Lift-Fahrt mehrere Zeilen pro
+	// Sekunde; 500 Zeilen reichten nur für etwa eine Minute.
+	ring := logbuf.NewRing(5000)
 	var extra []*logbuf.RotatingFile
 	if p.logPath != "" {
 		if err := os.MkdirAll(filepath.Dir(p.logPath), 0o750); err == nil {
-			if f, err := logbuf.OpenRotating(p.logPath, 2<<20); err == nil {
+			// 10 MB und eine Vorgänger-Datei: das Debug-Log einer Lift-Fahrt ist dicht.
+			if f, err := logbuf.OpenRotating(p.logPath, 10<<20); err == nil {
 				p.file = f
 				extra = append(extra, f)
 			} else {

@@ -33,6 +33,8 @@ func NewSimulator(cfg config.DeviceConfig, bus *device.Bus, log *slog.Logger) de
 			m.Close()
 			srv.Close()
 		}()
-		return NewClient(ln.Addr().String()), nil
+		c := NewClient(ln.Addr().String())
+		c.debug = func(msg string, args ...any) { log.Debug(msg, args...) }
+		return c, nil
 	})
 }
